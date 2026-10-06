@@ -1,0 +1,10 @@
+[package]
+name = "tw-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+tw-core = { path = "../tw-core" }
+tw-sim = { path = "../tw-sim" }
