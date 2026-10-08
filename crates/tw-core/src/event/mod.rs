@@ -1,4 +1,5 @@
 use crate::component::{ComponentId, PortId};
+use crate::resource::ResourceId;
 use crate::time::SimulationTime;
 use crate::tracing::TraceId;
 
@@ -11,6 +12,26 @@ pub enum EventPayload {
     PortSignal { port_id: PortId, value: String },
     Tick,
     Custom(String),
+    /// A component is requesting `amount` units from a resource.
+    ResourceRequested {
+        resource_id: ResourceId,
+        amount: u64,
+        requester: ComponentId,
+    },
+    /// The simulation granted `amount` units from a resource to the target component.
+    ResourceGranted { resource_id: ResourceId, amount: u64 },
+    /// The simulation denied a resource request (resource not registered or invalid request).
+    ResourceDenied {
+        resource_id: ResourceId,
+        amount: u64,
+        reason: String,
+    },
+    /// A component is releasing `amount` units back to a resource.
+    ResourceReleased {
+        resource_id: ResourceId,
+        amount: u64,
+        releaser: ComponentId,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]

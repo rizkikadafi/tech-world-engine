@@ -1,9 +1,10 @@
+use std::cmp::Ordering;
+use std::collections::{BinaryHeap, HashMap};
 use tw_core::{
     CausalGraph, Component, ComponentId, Connection, Event, EventId, EventPayload, Observer,
-    SimulationContext, SimulationTime, TraceId, TraceNode, TracingMode,
+    Resource, ResourceId, ResourceRequestResult, SimulationContext, SimulationTime, TraceId,
+    TraceNode, TracingMode,
 };
-use std::collections::{BinaryHeap, HashMap};
-use std::cmp::Ordering;
 
 #[derive(Debug)]
 struct ScheduledEvent(Event);
@@ -25,7 +26,11 @@ impl PartialOrd for ScheduledEvent {
 impl Ord for ScheduledEvent {
     fn cmp(&self, other: &Self) -> Ordering {
         // Reverse for min-heap (earliest time first)
-        other.0.time.cmp(&self.0.time).then_with(|| other.0.id.cmp(&self.0.id))
+        other
+            .0
+            .time
+            .cmp(&self.0.time)
+            .then_with(|| other.0.id.cmp(&self.0.id))
     }
 }
 
@@ -34,6 +39,7 @@ pub struct Simulation {
     clock: SimulationTime,
     event_queue: BinaryHeap<ScheduledEvent>,
     components: HashMap<ComponentId, Box<dyn Component>>,
+    resources: HashMap<ResourceId, Resource>,
     connections: Vec<Connection>,
     observers: Vec<Box<dyn Observer>>,
     causal_graph: CausalGraph,
@@ -60,6 +66,14 @@ impl Simulation {
 
     pub fn register_component(&mut self, component: Box<dyn Component>) {
         self.components.insert(component.id(), component);
+    }
+
+    pub fn register_resource(&mut self, resource: Resource) {
+        self.resources.insert(resource.id, resource);
+    }
+
+    pub fn get_resource(&self, id: ResourceId) -> Option<&Resource> {
+        self.resources.get(&id)
     }
 
     pub fn register_connection(&mut self, connection: Connection) {
@@ -91,17 +105,14 @@ impl Simulation {
                 .components
                 .get(&event.target)
                 .map(|c| c.name())
-                .unwrap_or("Unknown");
+                .unwrap_or("Engine/Resource");
             let desc = format!(
                 "Event #{:?} [{:?}] executed on Component '{}' (#{})",
                 event.id.0, event.payload, target_name, event.target.0
             );
-            let current_trace_id = self.causal_graph.record_event(
-                event.id,
-                event.time,
-                desc,
-                event.cause,
-            );
+            let current_trace_id = self
+                .causal_graph
+                .record_event(event.id, event.time, desc, event.cause);
 
             // 2. Notify all registered observers
             for observer in &mut self.observers {
@@ -112,7 +123,112 @@ impl Simulation {
             let mut exec_event = event.clone();
             exec_event.cause = Some(current_trace_id);
 
-            // 3. Dispatch to target component with SimulationContext
+            // 3. Handle Resource lifecycle events in engine loop
+            match &exec_event.payload {
+                EventPayload::ResourceRequested {
+                    resource_id,
+                    amount,
+                    requester,
+                } => {
+                    let resource_id = *resource_id;
+                    let amount = *amount;
+                    let requester = *requester;
+
+                    if let Some(res) = self.resources.get_mut(&resource_id) {
+                        let res_name = res.name.clone();
+                        match res.request(requester, amount, exec_event.cause) {
+                            ResourceRequestResult::Granted => {
+                                self.next_event_id += 1;
+                                let mut grant_event = Event::new(
+                                    EventId(self.next_event_id),
+                                    self.clock,
+                                    requester,
+                                    requester,
+                                    EventPayload::ResourceGranted {
+                                        resource_id,
+                                        amount,
+                                    },
+                                );
+                                grant_event.cause = exec_event.cause;
+                                self.event_queue.push(ScheduledEvent(grant_event));
+                            }
+                            ResourceRequestResult::Queued { queue_position } => {
+                                self.causal_graph.record_event(
+                                    exec_event.id,
+                                    self.clock,
+                                    format!(
+                                        "Resource '{}' (#{}) capacity exhausted. Request for {} units queued at position #{}",
+                                        res_name, resource_id.0, amount, queue_position
+                                    ),
+                                    exec_event.cause,
+                                );
+                            }
+                            ResourceRequestResult::Invalid { reason } => {
+                                self.next_event_id += 1;
+                                let mut deny_event = Event::new(
+                                    EventId(self.next_event_id),
+                                    self.clock,
+                                    requester,
+                                    requester,
+                                    EventPayload::ResourceDenied {
+                                        resource_id,
+                                        amount,
+                                        reason,
+                                    },
+                                );
+                                deny_event.cause = exec_event.cause;
+                                self.event_queue.push(ScheduledEvent(deny_event));
+                            }
+                        }
+                    } else {
+                        self.next_event_id += 1;
+                        let mut deny_event = Event::new(
+                            EventId(self.next_event_id),
+                            self.clock,
+                            requester,
+                            requester,
+                            EventPayload::ResourceDenied {
+                                resource_id,
+                                amount,
+                                reason: format!("Resource #{} not found", resource_id.0),
+                            },
+                        );
+                        deny_event.cause = exec_event.cause;
+                        self.event_queue.push(ScheduledEvent(deny_event));
+                    }
+                }
+                EventPayload::ResourceReleased {
+                    resource_id,
+                    amount,
+                    releaser: _,
+                } => {
+                    let resource_id = *resource_id;
+                    let amount = *amount;
+
+                    if let Some(res) = self.resources.get_mut(&resource_id) {
+                        let granted_list = res.release(amount);
+                        for granted in granted_list {
+                            self.next_event_id += 1;
+                            let mut grant_event = Event::new(
+                                EventId(self.next_event_id),
+                                self.clock,
+                                granted.requester,
+                                granted.requester,
+                                EventPayload::ResourceGranted {
+                                    resource_id: res.id,
+                                    amount: granted.amount,
+                                },
+                            );
+                            // Link cause of unblocking directly to the release event!
+                            grant_event.cause = Some(current_trace_id);
+                            self.event_queue.push(ScheduledEvent(grant_event));
+                        }
+                    }
+                }
+                _ => {}
+            }
+
+            // 4. Dispatch to target component with SimulationContext
             if let Some(component) = self.components.get_mut(&event.target) {
                 let mut ctx = SimulationContext::new(
                     self.clock,

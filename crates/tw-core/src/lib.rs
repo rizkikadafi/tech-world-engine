@@ -14,6 +14,8 @@ pub use state::{State, Snapshot};
 pub use event::{Event, EventId, EventPayload};
 pub use component::{Component, ComponentId, CompositeComponent, Port, PortBinding, PortDirection, PortId};
 pub use connection::Connection;
-pub use resource::{Resource, ResourceId};
+pub use resource::{
+    GrantedRequest, PendingRequest, Resource, ResourceId, ResourceRequestResult,
+};
 pub use observation::{EventLogObserver, Observer};
 pub use tracing::{CausalEdge, CausalGraph, TraceId, TraceNode, TracingMode};
