@@ -195,8 +195,8 @@ Phase 8 circuit solver
 Folder `docs/numerical/` akan menampung dokumen per-teori:
 
 - `overview.md` — **dokumen ini** (peta besar).
-- `linear-algebra.md` — LU, partial pivoting, sparse (CSR/CCS), fill-in,
-  Markowitz/AMD, analisis simbolik vs numerik.
+- `linear-algebra.md` — **selesai.** LU, partial pivoting, sparse (CSR/CCS),
+  fill-in, Markowitz/AMD, analisis simbolik vs numerik.
 - `nonlinear.md` — Newton-Raphson, Jacobian, konvergensi berlapis, gmin/source
   stepping, pseudo-transient.
 - `integration.md` — DAE, Trapezoidal, Gear/BDF, koefisien variable-step,
