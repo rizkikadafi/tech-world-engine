@@ -13,8 +13,8 @@ fn main() {
     let count = engine
         .simulation()
         .component_state(COUNTER_ID)
-        .and_then(|s| s.get("count"))
-        .unwrap_or("<none>");
+        .and_then(|s| s.get_int("count"))
+        .unwrap_or(0);
 
     println!(
         "Simulation finished at t={} ticks",

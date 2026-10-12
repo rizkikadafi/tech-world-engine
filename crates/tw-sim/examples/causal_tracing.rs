@@ -5,7 +5,7 @@
 
 use tw_core::{
     Component, ComponentId, Connection, Event, EventLogObserver, EventPayload, Port,
-    PortDirection, PortId, SimulationContext, SimulationTime, State, TraceId,
+    PortDirection, PortId, SimulationContext, SimulationTime, State, StateValue, TraceId,
 };
 use tw_sim::{Simulation, SimulationEngine};
 
@@ -33,7 +33,7 @@ impl Component for SignalSource {
     fn handle_event(&mut self, event: &Event, _ctx: &mut SimulationContext) -> Vec<Event> {
         let mut outputs = Vec::new();
         if let EventPayload::PortSignal { ref value, .. } = event.payload {
-            self.state.set("val", value);
+            self.state.set("val", value.clone());
             outputs.push(Event::at(
                 event.time,
                 self.id,
@@ -72,7 +72,7 @@ impl Component for BufferGate {
     fn handle_event(&mut self, event: &Event, _ctx: &mut SimulationContext) -> Vec<Event> {
         let mut outputs = Vec::new();
         if let EventPayload::PortSignal { ref value, .. } = event.payload {
-            self.state.set("val", value);
+            self.state.set("val", value.clone());
             outputs.push(Event::at(
                 event.time,
                 self.id,
@@ -111,7 +111,7 @@ impl Component for InverterGate {
     fn handle_event(&mut self, event: &Event, _ctx: &mut SimulationContext) -> Vec<Event> {
         let mut outputs = Vec::new();
         if let EventPayload::PortSignal { ref value, .. } = event.payload {
-            let inv = if value == "1" { "0" } else { "1" };
+            let inv = if value.as_int().unwrap_or(0) != 0 { 0 } else { 1 };
             self.state.set("val", inv);
             outputs.push(Event::at(
                 event.time,
@@ -119,7 +119,7 @@ impl Component for InverterGate {
                 self.id,
                 EventPayload::PortSignal {
                     port_id: PortId(31),
-                    value: inv.to_string(),
+                    value: StateValue::from(inv),
                 },
             ));
         }
@@ -172,7 +172,7 @@ fn main() {
         src_id,
         EventPayload::PortSignal {
             port_id: PortId(10),
-            value: "1".to_string(),
+            value: StateValue::Int(1),
         },
     ));
 
@@ -183,7 +183,8 @@ fn main() {
         .simulation()
         .component_state(inv_id)
         .and_then(|s| s.get("val"))
-        .unwrap_or("<none>");
+        .map(|v| v.to_string())
+        .unwrap_or_else(|| "<none>".to_string());
     println!("Inverter final value: {final_val}");
 
     println!("\n--- Causal Tracing Query (WHY did the final event happen?) ---");

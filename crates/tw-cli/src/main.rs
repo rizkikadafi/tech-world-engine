@@ -6,7 +6,7 @@
 use std::process::ExitCode;
 
 use tw_core::ComponentId;
-use tw_sim::scenarios::{counter, digital, resource_contention};
+use tw_sim::scenarios::{counter, digital, disk_service, resource_contention};
 use tw_sim::SimulationEngine;
 
 const USAGE: &str = "\
@@ -21,6 +21,7 @@ Usage:
 Scenarios:
   counter                Generic counter that ticks to a limit
   resource-contention    Three workers competing for a capacity-2 resource
+  disk-service           Capacity-1 disk with service time (emergent latency)
   full-adder             Full adder (composite components) truth table
 ";
 
@@ -50,7 +51,7 @@ fn read_state(engine: &SimulationEngine, id: ComponentId, key: &str) -> Option<S
         .simulation()
         .component_state(id)?
         .get(key)
-        .map(str::to_string)
+        .map(|v| v.to_string())
 }
 
 fn run(scenario: Option<&str>) -> ExitCode {
@@ -75,6 +76,21 @@ fn run(scenario: Option<&str>) -> ExitCode {
                 println!(
                     "{label}: {}",
                     read_state(&engine, id, "status").unwrap_or_default()
+                );
+            }
+            ExitCode::SUCCESS
+        }
+        Some("disk-service") => {
+            let mut engine = SimulationEngine::new(disk_service::build());
+            while engine.simulation_mut().step().is_some() {}
+            println!("job | arrived | granted | latency");
+            for (id, latency) in disk_service::latencies(&engine) {
+                println!(
+                    "Job{} | {} | {} | {}",
+                    id.0,
+                    read_state(&engine, id, "arrived_at").unwrap_or_default(),
+                    read_state(&engine, id, "granted_at").unwrap_or_default(),
+                    latency
                 );
             }
             ExitCode::SUCCESS
@@ -138,6 +154,22 @@ fn inspect(scenario: Option<&str>) -> ExitCode {
                 ("Worker1", resource_contention::WORKER1_ID),
                 ("Worker2", resource_contention::WORKER2_ID),
                 ("Worker3", resource_contention::WORKER3_ID),
+            ] {
+                println!(
+                    "{label}.status = {}",
+                    read_state(&engine, id, "status").unwrap_or_default()
+                );
+            }
+            ExitCode::SUCCESS
+        }
+        Some("disk-service") => {
+            let mut engine = SimulationEngine::new(disk_service::build());
+            while engine.simulation_mut().step().is_some() {}
+            println!("components: {}", engine.simulation().component_count());
+            for (label, id) in [
+                ("Job1", disk_service::JOB1_ID),
+                ("Job2", disk_service::JOB2_ID),
+                ("Job3", disk_service::JOB3_ID),
             ] {
                 println!(
                     "{label}.status = {}",

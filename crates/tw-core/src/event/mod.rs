@@ -1,5 +1,6 @@
 use crate::component::{ComponentId, PortId};
-use crate::resource::ResourceId;
+use crate::resource::{Amount, ResourceId};
+use crate::state::StateValue;
 use crate::time::SimulationTime;
 use crate::tracing::TraceId;
 
@@ -8,28 +9,29 @@ pub struct EventId(pub u64);
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum EventPayload {
-    SignalChanged { name: String, value: String },
-    PortSignal { port_id: PortId, value: String },
+    SignalChanged { name: String, value: StateValue },
+    PortSignal { port_id: PortId, value: StateValue },
     Tick,
     Custom(String),
-    /// A component is requesting `amount` units from a resource.
+    /// A component is requesting `amount` from a resource.
     ResourceRequested {
         resource_id: ResourceId,
-        amount: u64,
+        amount: Amount,
         requester: ComponentId,
     },
-    /// The simulation granted `amount` units from a resource to the target component.
-    ResourceGranted { resource_id: ResourceId, amount: u64 },
+    /// The simulation granted `amount` from a resource to the target component.
+    ResourceGranted { resource_id: ResourceId, amount: Amount },
     /// The simulation denied a resource request (resource not registered or invalid request).
     ResourceDenied {
         resource_id: ResourceId,
-        amount: u64,
+        amount: Amount,
         reason: String,
     },
-    /// A component is releasing `amount` units back to a resource.
+    /// A component (or the engine, on service completion) is releasing `amount`
+    /// back to a resource.
     ResourceReleased {
         resource_id: ResourceId,
-        amount: u64,
+        amount: Amount,
         releaser: ComponentId,
     },
 }

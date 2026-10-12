@@ -17,8 +17,8 @@ use std::collections::HashMap;
 
 use tw_core::{
     Component, ComponentId, CompositeComponent, Connection, Event, EventPayload, Port,
-    PortBinding, PortDirection, PortId, SimulationContext, SimulationTime, State, TraceId,
-    TracingMode,
+    PortBinding, PortDirection, PortId, SimulationContext, SimulationTime, State, StateValue,
+    TraceId, TracingMode,
 };
 
 use crate::engine::SimulationEngine;
@@ -115,7 +115,7 @@ impl Component for Gate {
     fn handle_event(&mut self, event: &Event, _ctx: &mut SimulationContext) -> Vec<Event> {
         let mut outputs = Vec::new();
         if let EventPayload::PortSignal { port_id, ref value } = event.payload {
-            let val: u8 = value.parse().unwrap_or(0);
+            let val = value.as_int().unwrap_or(0) as u8;
             let base = self.kind.base();
             if port_id == PortId(base + 1) {
                 self.a = val;
@@ -126,14 +126,14 @@ impl Component for Gate {
             }
 
             let y = self.kind.eval(self.a, self.b);
-            self.state.set("y", y.to_string());
+            self.state.set("y", y);
             outputs.push(Event::at(
                 event.time,
                 self.id,
                 self.id,
                 EventPayload::PortSignal {
                     port_id: self.kind.out_port(),
-                    value: y.to_string(),
+                    value: StateValue::from(y),
                 },
             ));
         }
@@ -284,7 +284,7 @@ pub fn run_full_adder(a: u8, b: u8, cin: u8, mode: TracingMode) -> SimulationEng
             FULL_ADDER_ID,
             EventPayload::PortSignal {
                 port_id,
-                value: value.to_string(),
+                value: StateValue::from(value),
             },
         ));
     }
@@ -297,8 +297,8 @@ pub fn run_full_adder(a: u8, b: u8, cin: u8, mode: TracingMode) -> SimulationEng
 /// Read the observed `(Sum, Carry)` from the probe, if present.
 pub fn full_adder_result(engine: &SimulationEngine) -> Option<(u8, u8)> {
     let state = engine.simulation().component_state(PROBE_ID)?;
-    let sum = state.get("sum")?.parse().ok()?;
-    let carry = state.get("carry")?.parse().ok()?;
+    let sum = state.get("sum")?.as_int()? as u8;
+    let carry = state.get("carry")?.as_int()? as u8;
     Some((sum, carry))
 }
 

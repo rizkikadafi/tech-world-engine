@@ -75,7 +75,7 @@ impl Component for WorkerProcess {
                     self.id,
                     EventPayload::ResourceRequested {
                         resource_id: self.resource_id,
-                        amount: 1,
+                        amount: 1.into(),
                         requester: self.id,
                     },
                 ));
@@ -98,7 +98,7 @@ impl Component for WorkerProcess {
                     self.id,
                     EventPayload::ResourceReleased {
                         resource_id: self.resource_id,
-                        amount: 1,
+                        amount: 1.into(),
                         releaser: self.id,
                     },
                 ));

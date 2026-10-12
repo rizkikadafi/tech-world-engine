@@ -67,7 +67,7 @@ fn counter_ticks_until_limit() {
         .simulation()
         .component_state(counter::COUNTER_ID)
         .expect("counter registered");
-    assert_eq!(state.get("count"), Some("3"));
+    assert_eq!(state.get_int("count"), Some(3));
 }
 
 #[test]
@@ -99,7 +99,7 @@ fn resource_capacity_causes_queue_and_latency() {
             .simulation()
             .component_state(id)
             .expect("worker registered");
-        assert_eq!(state.get("status"), Some("Finished"));
+        assert_eq!(state.get_str("status"), Some("Finished"));
     }
 }
 

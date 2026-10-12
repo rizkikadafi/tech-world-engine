@@ -10,12 +10,16 @@ pub mod tracing;
 
 pub use context::SimulationContext;
 pub use time::SimulationTime;
-pub use state::{State, Snapshot};
+pub use state::{Snapshot, State, StateValue};
 pub use event::{Event, EventId, EventPayload};
-pub use component::{Component, ComponentId, CompositeComponent, Port, PortBinding, PortDirection, PortId};
+pub use component::{
+    Component, ComponentId, CompositeComponent, CompositeError, Port, PortBinding, PortDirection,
+    PortId,
+};
 pub use connection::Connection;
 pub use resource::{
-    GrantedRequest, PendingRequest, Resource, ResourceId, ResourceRequestResult,
+    AllocationPolicy, Amount, FifoPolicy, GrantedRequest, PendingRequest, PriorityPolicy, Resource,
+    ResourceId, ResourceRequestResult, ResourceSnapshot,
 };
 pub use observation::{EventLogObserver, Observer};
 pub use tracing::{CausalEdge, CausalGraph, TraceId, TraceNode, TracingMode};

@@ -1,11 +1,49 @@
-use crate::component::{Component, ComponentId, Port, PortBinding};
+use crate::component::{Component, ComponentId, Port, PortBinding, PortDirection};
 use crate::connection::Connection;
 use crate::context::SimulationContext;
 use crate::event::{Event, EventPayload};
 use crate::state::State;
 use crate::tracing::TracingMode;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
+/// A wiring problem found while validating a [`CompositeComponent`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CompositeError {
+    /// A binding refers to an external port the composite does not declare.
+    UnknownExternalPort { external_port: crate::component::PortId },
+    /// A binding or internal connection names a subcomponent that does not exist.
+    UnknownSubcomponent { component: ComponentId },
+    /// A binding or internal connection names a port the subcomponent does not declare.
+    UnknownSubcomponentPort {
+        component: ComponentId,
+        port: crate::component::PortId,
+    },
+    /// The external and internal ports carry signals in incompatible directions.
+    DirectionMismatch {
+        external_port: crate::component::PortId,
+        internal_component: ComponentId,
+        internal_port: crate::component::PortId,
+    },
+    /// The exact same binding was declared more than once.
+    DuplicateBinding {
+        external_port: crate::component::PortId,
+        internal_component: ComponentId,
+        internal_port: crate::component::PortId,
+    },
+    /// An internal connection references an unknown subcomponent or port.
+    UnknownConnectionEndpoint {
+        component: ComponentId,
+        port: crate::component::PortId,
+    },
+}
+
+/// A component built from other components.
+///
+/// **Hierarchy lives inside the composite.** The engine only sees top-level
+/// components: it dispatches events to the composite, which routes them to
+/// subcomponents over [`Connection`]s and `PortBinding`s, then resolves the
+/// subcomponents' outputs back out. Subcomponents are never registered with the
+/// engine directly.
 #[derive(Debug)]
 pub struct CompositeComponent {
     id: ComponentId,
@@ -56,6 +94,130 @@ impl CompositeComponent {
 
     pub fn port_bindings(&self) -> &[PortBinding] {
         &self.port_bindings
+    }
+
+    /// Validate the composite's wiring.
+    ///
+    /// Checks that every binding and internal connection refers to declared
+    /// external ports, existing subcomponents, and ports those subcomponents
+    /// actually expose; that bound ports carry compatible signal directions; and
+    /// that no binding is declared twice. Returns every problem found so callers
+    /// can report all wiring errors at once.
+    pub fn validate(&self) -> Result<(), Vec<CompositeError>> {
+        let mut errors = Vec::new();
+
+        let external_direction = |port: crate::component::PortId| {
+            self.ports
+                .iter()
+                .find(|p| p.id == port)
+                .map(|p| p.direction)
+        };
+
+        let subcomponent_port = |component: ComponentId, port: crate::component::PortId| {
+            self.subcomponents
+                .get(&component)
+                .and_then(|sub| sub.ports().iter().find(|p| p.id == port))
+                .map(|p| p.direction)
+        };
+
+        let mut seen_bindings = HashSet::new();
+        for binding in &self.port_bindings {
+            let key = (
+                binding.external_port,
+                binding.internal_component,
+                binding.internal_port,
+            );
+            if !seen_bindings.insert(key) {
+                errors.push(CompositeError::DuplicateBinding {
+                    external_port: binding.external_port,
+                    internal_component: binding.internal_component,
+                    internal_port: binding.internal_port,
+                });
+            }
+
+            let Some(external_direction) = external_direction(binding.external_port) else {
+                errors.push(CompositeError::UnknownExternalPort {
+                    external_port: binding.external_port,
+                });
+                continue;
+            };
+
+            if !self.subcomponents.contains_key(&binding.internal_component) {
+                errors.push(CompositeError::UnknownSubcomponent {
+                    component: binding.internal_component,
+                });
+                continue;
+            }
+
+            let Some(internal_direction) =
+                subcomponent_port(binding.internal_component, binding.internal_port)
+            else {
+                errors.push(CompositeError::UnknownSubcomponentPort {
+                    component: binding.internal_component,
+                    port: binding.internal_port,
+                });
+                continue;
+            };
+
+            let compatible = match external_direction {
+                PortDirection::Bidirectional => true,
+                PortDirection::Input => matches!(
+                    internal_direction,
+                    PortDirection::Input | PortDirection::Bidirectional
+                ),
+                PortDirection::Output => matches!(
+                    internal_direction,
+                    PortDirection::Output | PortDirection::Bidirectional
+                ),
+            };
+            if !compatible {
+                errors.push(CompositeError::DirectionMismatch {
+                    external_port: binding.external_port,
+                    internal_component: binding.internal_component,
+                    internal_port: binding.internal_port,
+                });
+            }
+        }
+
+        for connection in &self.internal_connections {
+            if !self.subcomponents.contains_key(&connection.source_component)
+                || self
+                    .subcomponent_port_exists(connection.source_component, connection.source_port)
+                    .is_none()
+            {
+                errors.push(CompositeError::UnknownConnectionEndpoint {
+                    component: connection.source_component,
+                    port: connection.source_port,
+                });
+            }
+            if !self.subcomponents.contains_key(&connection.target_component)
+                || self
+                    .subcomponent_port_exists(connection.target_component, connection.target_port)
+                    .is_none()
+            {
+                errors.push(CompositeError::UnknownConnectionEndpoint {
+                    component: connection.target_component,
+                    port: connection.target_port,
+                });
+            }
+        }
+
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors)
+        }
+    }
+
+    fn subcomponent_port_exists(
+        &self,
+        component: ComponentId,
+        port: crate::component::PortId,
+    ) -> Option<()> {
+        self.subcomponents
+            .get(&component)
+            .and_then(|sub| sub.ports().iter().find(|p| p.id == port))
+            .map(|_| ())
     }
 
     /// Resolve events emitted by a subcomponent.

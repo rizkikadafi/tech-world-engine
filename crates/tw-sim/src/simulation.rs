@@ -1,10 +1,23 @@
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
 use tw_core::{
-    CausalGraph, Component, ComponentId, Connection, Event, EventId, EventPayload, Observer,
-    Resource, ResourceId, ResourceRequestResult, SimulationContext, SimulationTime, State,
-    TraceId, TraceNode, TracingMode,
+    Amount, CausalGraph, Component, ComponentId, Connection, Event, EventId, EventPayload, Observer,
+    Resource, ResourceId, ResourceRequestResult, ResourceSnapshot, SimulationContext,
+    SimulationTime, Snapshot, State, TraceId, TraceNode, TracingMode,
 };
+
+/// A captured point-in-time view of engine-owned state.
+///
+/// `component_states` holds each component's public [`State`] for inspection or
+/// replay; `resources` holds restorable resource state. Component *internal*
+/// fields are not captured generically — a component that needs full restore
+/// support should keep its meaningful state in [`State`].
+#[derive(Debug, Clone)]
+pub struct Checkpoint {
+    pub time: SimulationTime,
+    pub component_states: Vec<(ComponentId, State)>,
+    pub resources: Vec<ResourceSnapshot>,
+}
 
 #[derive(Debug)]
 struct ScheduledEvent(Event);
@@ -64,8 +77,16 @@ impl Simulation {
         self.tracing_mode
     }
 
-    pub fn register_component(&mut self, component: Box<dyn Component>) {
+    pub fn register_component(&mut self, mut component: Box<dyn Component>) {
+        let mount_events = {
+            let mut ctx =
+                SimulationContext::new(self.clock, &mut self.causal_graph, self.tracing_mode);
+            component.on_mount(&mut ctx)
+        };
         self.components.insert(component.id(), component);
+        for event in mount_events {
+            self.schedule_event(event);
+        }
     }
 
     pub fn register_resource(&mut self, resource: Resource) {
@@ -82,6 +103,25 @@ impl Simulation {
 
     pub fn register_observer(&mut self, observer: Box<dyn Observer>) {
         self.observers.push(observer);
+    }
+
+    /// Call [`Component::on_unmount`] on every component and schedule any events
+    /// they return.
+    pub fn shutdown(&mut self) {
+        let component_ids: Vec<ComponentId> = self.components.keys().copied().collect();
+        for id in component_ids {
+            let events = {
+                let mut ctx =
+                    SimulationContext::new(self.clock, &mut self.causal_graph, self.tracing_mode);
+                match self.components.get_mut(&id) {
+                    Some(component) => component.on_unmount(&mut ctx),
+                    None => Vec::new(),
+                }
+            };
+            for event in events {
+                self.schedule_event(event);
+            }
+        }
     }
 
     pub fn causal_graph(&self) -> &CausalGraph {
@@ -105,6 +145,44 @@ impl Simulation {
 
     pub fn explain(&self, target: TraceId) -> Vec<&TraceNode> {
         self.causal_graph.explain(target)
+    }
+
+    /// Capture a checkpoint of engine-owned state.
+    ///
+    /// Every registered observer receives one [`Snapshot`] per component (with
+    /// the current simulation time), and resource state is captured for a later
+    /// [`Simulation::restore_resources`].
+    pub fn checkpoint(&mut self) -> Checkpoint {
+        let time = self.clock;
+
+        let mut component_states = Vec::with_capacity(self.components.len());
+        for component in self.components.values() {
+            let state = component.state().clone();
+            for observer in &mut self.observers {
+                observer.on_snapshot(&Snapshot::new(time, state.clone()));
+            }
+            component_states.push((component.id(), state));
+        }
+
+        let resources = self.resources.values().map(Resource::snapshot).collect();
+
+        Checkpoint {
+            time,
+            component_states,
+            resources,
+        }
+    }
+
+    /// Restore engine-owned resource state from a checkpoint.
+    ///
+    /// The simulation clock is intentionally left untouched: time is advanced
+    /// by the event loop, not by restore.
+    pub fn restore_resources(&mut self, checkpoint: &Checkpoint) {
+        for snapshot in &checkpoint.resources {
+            if let Some(resource) = self.resources.get_mut(&snapshot.id) {
+                resource.restore(snapshot);
+            }
+        }
     }
 
     /// Assign the next engine-authoritative event id.
@@ -168,10 +246,10 @@ impl Simulation {
                 let known = self
                     .resources
                     .get(&resource_id)
-                    .map(|res| res.name.clone());
+                    .map(|res| (res.name.clone(), res.service_time));
 
                 match known {
-                    Some(res_name) => {
+                    Some((res_name, service_time)) => {
                         let result = self
                             .resources
                             .get_mut(&resource_id)
@@ -180,10 +258,11 @@ impl Simulation {
 
                         match result {
                             ResourceRequestResult::Granted => {
-                                self.push_internal(
+                                self.grant_and_schedule(
+                                    resource_id,
                                     requester,
-                                    requester,
-                                    EventPayload::ResourceGranted { resource_id, amount },
+                                    amount,
+                                    service_time,
                                     exec_event.cause,
                                 );
                             }
@@ -235,6 +314,11 @@ impl Simulation {
             } => {
                 let resource_id = *resource_id;
                 let amount = *amount;
+                let service_time = self
+                    .resources
+                    .get(&resource_id)
+                    .map(|res| res.service_time)
+                    .unwrap_or(0);
 
                 let granted_list = if let Some(res) = self.resources.get_mut(&resource_id) {
                     res.release(amount)
@@ -244,13 +328,11 @@ impl Simulation {
 
                 for granted in granted_list {
                     // Link the unblocking directly to the release event.
-                    self.push_internal(
+                    self.grant_and_schedule(
+                        resource_id,
                         granted.requester,
-                        granted.requester,
-                        EventPayload::ResourceGranted {
-                            resource_id,
-                            amount: granted.amount,
-                        },
+                        granted.amount,
+                        service_time,
                         current_trace_id,
                     );
                 }
@@ -317,6 +399,47 @@ impl Simulation {
         let mut event = Event::new(id, self.clock, source, target, payload);
         event.cause = cause;
         self.event_queue.push(ScheduledEvent(event));
+    }
+
+    /// Emit a `ResourceGranted` and, when the resource has a service time,
+    /// schedule the automatic release that frees the capacity later.
+    ///
+    /// This is the mechanism that turns contention into latency: because a
+    /// granted allocation holds capacity for `service_time`, any request queued
+    /// behind it waits that long before it can be granted — with no
+    /// domain-specific "slow down" rule anywhere.
+    fn grant_and_schedule(
+        &mut self,
+        resource_id: ResourceId,
+        requester: ComponentId,
+        amount: Amount,
+        service_time: u64,
+        cause: Option<TraceId>,
+    ) {
+        self.push_internal(
+            requester,
+            requester,
+            EventPayload::ResourceGranted { resource_id, amount },
+            cause,
+        );
+
+        if service_time > 0 {
+            let id = self.next_id();
+            let completes_at = SimulationTime::new(self.clock.ticks() + service_time);
+            let mut event = Event::new(
+                id,
+                completes_at,
+                requester,
+                requester,
+                EventPayload::ResourceReleased {
+                    resource_id,
+                    amount,
+                    releaser: requester,
+                },
+            );
+            event.cause = cause;
+            self.event_queue.push(ScheduledEvent(event));
+        }
     }
 
     pub fn run_until(&mut self, until: SimulationTime) {

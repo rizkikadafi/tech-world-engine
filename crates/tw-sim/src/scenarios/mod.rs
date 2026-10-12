@@ -9,4 +9,5 @@
 
 pub mod counter;
 pub mod digital;
+pub mod disk_service;
 pub mod resource_contention;

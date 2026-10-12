@@ -1,4 +1,4 @@
-use tw_core::{Event, EventId, EventPayload, SimulationTime, Snapshot, State};
+use tw_core::{Event, EventId, EventPayload, SimulationTime, Snapshot, State, StateValue};
 use tw_core::{ComponentId, TracingMode};
 
 #[test]
@@ -11,22 +11,43 @@ fn simulation_time_advances_by_ticks() {
 }
 
 #[test]
-fn state_stores_and_reads_values() {
+fn state_stores_typed_values() {
     let mut state = State::new();
     assert_eq!(state.get("missing"), None);
-    state.set("count", "42");
-    assert_eq!(state.get("count"), Some("42"));
-    state.set("count", "43");
-    assert_eq!(state.get("count"), Some("43"));
+
+    state.set("count", 42);
+    state.set("ratio", 1.5f64);
+    state.set("enabled", true);
+    state.set("label", "adc");
+
+    assert_eq!(state.get_int("count"), Some(42));
+    assert_eq!(state.get_float("ratio"), Some(1.5));
+    assert_eq!(state.get_bool("enabled"), Some(true));
+    assert_eq!(state.get_str("label"), Some("adc"));
+    assert_eq!(state.len(), 4);
+
+    // Accessors are typed: an Int is not readable as Text.
+    assert_eq!(state.get_str("count"), None);
+    assert_eq!(state.get("count"), Some(&StateValue::Int(42)));
+}
+
+#[test]
+fn state_overwrites_and_removes() {
+    let mut state = State::new();
+    state.set("count", 1);
+    state.set("count", 2);
+    assert_eq!(state.get_int("count"), Some(2));
+    assert_eq!(state.remove("count"), Some(StateValue::Int(2)));
+    assert!(!state.contains_key("count"));
 }
 
 #[test]
 fn snapshot_captures_time_and_state() {
     let mut state = State::new();
-    state.set("voltage", "3.3");
+    state.set("voltage", 3.3f64);
     let snapshot = Snapshot::new(SimulationTime::new(10), state.clone());
     assert_eq!(snapshot.time.ticks(), 10);
-    assert_eq!(snapshot.state.get("voltage"), Some("3.3"));
+    assert_eq!(snapshot.state.get_float("voltage"), Some(3.3));
 }
 
 #[test]

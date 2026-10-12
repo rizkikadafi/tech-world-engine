@@ -24,6 +24,28 @@ fn record_event_creates_causal_edge() {
 }
 
 #[test]
+fn explain_deduplicates_diamond_and_orders_causes_first() {
+    let mut graph = CausalGraph::new();
+    let a = graph.record_event(EventId(1), SimulationTime::new(0), "A", None);
+    let b = graph.record_event(EventId(2), SimulationTime::new(1), "B", Some(a));
+    let c = graph.record_event(EventId(3), SimulationTime::new(1), "C", Some(a));
+    let d = graph.record_event(EventId(4), SimulationTime::new(2), "D", Some(b));
+
+    // D is also caused by C (diamond): D <- B <- A and D <- C <- A.
+    graph.add_edge(tw_core::CausalEdge {
+        cause: c,
+        effect: d,
+        relation: "caused".to_string(),
+    });
+
+    let path = graph.explain(d);
+    let descriptions: Vec<&str> = path.iter().map(|n| n.description.as_str()).collect();
+
+    // Each node appears exactly once, causes before effects.
+    assert_eq!(descriptions, vec!["A", "B", "C", "D"]);
+}
+
+#[test]
 fn explain_unknown_trace_is_empty() {
     let graph = CausalGraph::new();
     assert!(graph.explain(TraceId(999)).is_empty());

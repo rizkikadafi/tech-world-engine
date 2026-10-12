@@ -23,7 +23,7 @@ pub struct Counter {
 impl Counter {
     pub fn new(id: ComponentId, name: impl Into<String>, limit: u64, interval: u64) -> Self {
         let mut state = State::new();
-        state.set("count", "0");
+        state.set("count", 0);
         Self {
             id,
             name: name.into(),
@@ -57,7 +57,7 @@ impl Component for Counter {
         let mut next_events = Vec::new();
         if let EventPayload::Tick = event.payload {
             self.count += 1;
-            self.state.set("count", self.count.to_string());
+            self.state.set("count", self.count);
 
             if self.count < self.limit {
                 let at = SimulationTime::new(event.time.ticks() + self.interval);

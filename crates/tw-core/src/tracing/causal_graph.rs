@@ -1,6 +1,6 @@
 use crate::event::EventId;
 use crate::time::SimulationTime;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TracingMode {
@@ -100,21 +100,32 @@ impl CausalGraph {
         &self.edges
     }
 
+    /// Return the unique causal ancestors of `target` (including `target`)
+    /// in causal order (causes before effects).
+    ///
+    /// Each [`TraceNode`] appears exactly once. Nodes are ordered by trace id,
+    /// which is creation order and therefore always topological: a node's cause
+    /// is always recorded before the node itself.
     pub fn explain(&self, target: TraceId) -> Vec<&TraceNode> {
-        let mut path = Vec::new();
-        self.collect_causes(target, &mut path);
-        path.reverse();
-        path
-    }
+        let mut included: HashSet<TraceId> = HashSet::new();
+        let mut stack = vec![target];
 
-    fn collect_causes<'a>(&'a self, target: TraceId, path: &mut Vec<&'a TraceNode>) {
-        if let Some(node) = self.nodes.get(&target) {
-            path.push(node);
+        while let Some(id) = stack.pop() {
+            if !self.nodes.contains_key(&id) || !included.insert(id) {
+                continue;
+            }
             for edge in &self.edges {
-                if edge.effect == target {
-                    self.collect_causes(edge.cause, path);
+                if edge.effect == id {
+                    stack.push(edge.cause);
                 }
             }
         }
+
+        let mut nodes: Vec<&TraceNode> = included
+            .iter()
+            .filter_map(|id| self.nodes.get(id))
+            .collect();
+        nodes.sort_by_key(|node| node.id.0);
+        nodes
     }
 }

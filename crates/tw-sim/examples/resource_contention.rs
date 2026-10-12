@@ -21,7 +21,7 @@ fn main() {
         let status = engine
             .simulation()
             .component_state(id)
-            .and_then(|s| s.get("status"))
+            .and_then(|s| s.get_str("status"))
             .unwrap_or("<none>");
         println!("  {label}: {status}");
     }
