@@ -2,8 +2,8 @@ use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
 use tw_core::{
     CausalGraph, Component, ComponentId, Connection, Event, EventId, EventPayload, Observer,
-    Resource, ResourceId, ResourceRequestResult, SimulationContext, SimulationTime, TraceId,
-    TraceNode, TracingMode,
+    Resource, ResourceId, ResourceRequestResult, SimulationContext, SimulationTime, State,
+    TraceId, TraceNode, TracingMode,
 };
 
 #[derive(Debug)]
@@ -88,19 +88,46 @@ impl Simulation {
         &self.causal_graph
     }
 
+    /// Borrow a registered component by id (top-level components only).
+    pub fn component(&self, id: ComponentId) -> Option<&dyn Component> {
+        self.components.get(&id).map(|c| c.as_ref())
+    }
+
+    /// Borrow the state of a registered component by id.
+    pub fn component_state(&self, id: ComponentId) -> Option<&State> {
+        self.components.get(&id).map(|c| c.state())
+    }
+
+    /// Number of registered top-level components.
+    pub fn component_count(&self) -> usize {
+        self.components.len()
+    }
+
     pub fn explain(&self, target: TraceId) -> Vec<&TraceNode> {
         self.causal_graph.explain(target)
     }
 
-    pub fn schedule_event(&mut self, event: Event) {
+    /// Assign the next engine-authoritative event id.
+    fn next_id(&mut self) -> EventId {
+        self.next_event_id += 1;
+        EventId(self.next_event_id)
+    }
+
+    /// Schedule an event for execution.
+    ///
+    /// The engine overwrites `event.id` with a fresh, authoritative id, so
+    /// component-authored ids (which may collide) never affect ordering.
+    pub fn schedule_event(&mut self, mut event: Event) {
+        event.id = self.next_id();
         self.event_queue.push(ScheduledEvent(event));
     }
 
     pub fn step(&mut self) -> Option<Event> {
-        if let Some(ScheduledEvent(event)) = self.event_queue.pop() {
-            self.clock = event.time;
+        let ScheduledEvent(event) = self.event_queue.pop()?;
+        self.clock = event.time;
 
-            // 1. Record event execution in Causal Graph
+        // 1. Record event execution in the causal graph (unless tracing is off).
+        let current_trace_id = if self.tracing_mode.is_enabled() {
             let target_name = self
                 .components
                 .get(&event.target)
@@ -110,64 +137,71 @@ impl Simulation {
                 "Event #{:?} [{:?}] executed on Component '{}' (#{})",
                 event.id.0, event.payload, target_name, event.target.0
             );
-            let current_trace_id = self
-                .causal_graph
-                .record_event(event.id, event.time, desc, event.cause);
+            Some(
+                self.causal_graph
+                    .record_event(event.id, event.time, desc, event.cause),
+            )
+        } else {
+            event.cause
+        };
 
-            // 2. Notify all registered observers
-            for observer in &mut self.observers {
-                observer.on_event(&event);
-            }
+        // 2. Notify all registered observers (observation is independent of tracing).
+        for observer in &mut self.observers {
+            observer.on_event(&event);
+        }
 
-            // Prepare exec event with updated cause
-            let mut exec_event = event.clone();
-            exec_event.cause = Some(current_trace_id);
+        // Prepare exec event with updated cause.
+        let mut exec_event = event.clone();
+        exec_event.cause = current_trace_id;
 
-            // 3. Handle Resource lifecycle events in engine loop
-            match &exec_event.payload {
-                EventPayload::ResourceRequested {
-                    resource_id,
-                    amount,
-                    requester,
-                } => {
-                    let resource_id = *resource_id;
-                    let amount = *amount;
-                    let requester = *requester;
+        // 3. Handle Resource lifecycle events in the engine loop.
+        match &exec_event.payload {
+            EventPayload::ResourceRequested {
+                resource_id,
+                amount,
+                requester,
+            } => {
+                let resource_id = *resource_id;
+                let amount = *amount;
+                let requester = *requester;
 
-                    if let Some(res) = self.resources.get_mut(&resource_id) {
-                        let res_name = res.name.clone();
-                        match res.request(requester, amount, exec_event.cause) {
+                let known = self
+                    .resources
+                    .get(&resource_id)
+                    .map(|res| res.name.clone());
+
+                match known {
+                    Some(res_name) => {
+                        let result = self
+                            .resources
+                            .get_mut(&resource_id)
+                            .expect("resource checked above")
+                            .request(requester, amount, exec_event.cause);
+
+                        match result {
                             ResourceRequestResult::Granted => {
-                                self.next_event_id += 1;
-                                let mut grant_event = Event::new(
-                                    EventId(self.next_event_id),
-                                    self.clock,
+                                self.push_internal(
                                     requester,
                                     requester,
-                                    EventPayload::ResourceGranted {
-                                        resource_id,
-                                        amount,
-                                    },
-                                );
-                                grant_event.cause = exec_event.cause;
-                                self.event_queue.push(ScheduledEvent(grant_event));
-                            }
-                            ResourceRequestResult::Queued { queue_position } => {
-                                self.causal_graph.record_event(
-                                    exec_event.id,
-                                    self.clock,
-                                    format!(
-                                        "Resource '{}' (#{}) capacity exhausted. Request for {} units queued at position #{}",
-                                        res_name, resource_id.0, amount, queue_position
-                                    ),
+                                    EventPayload::ResourceGranted { resource_id, amount },
                                     exec_event.cause,
                                 );
                             }
+                            ResourceRequestResult::Queued { queue_position } => {
+                                if self.tracing_mode.is_enabled() {
+                                    self.causal_graph.record_event(
+                                        exec_event.id,
+                                        self.clock,
+                                        format!(
+                                            "Resource '{}' (#{}) capacity exhausted. Request for {} units queued at position #{}",
+                                            res_name, resource_id.0, amount, queue_position
+                                        ),
+                                        exec_event.cause,
+                                    );
+                                }
+                            }
                             ResourceRequestResult::Invalid { reason } => {
-                                self.next_event_id += 1;
-                                let mut deny_event = Event::new(
-                                    EventId(self.next_event_id),
-                                    self.clock,
+                                self.push_internal(
                                     requester,
                                     requester,
                                     EventPayload::ResourceDenied {
@@ -175,16 +209,13 @@ impl Simulation {
                                         amount,
                                         reason,
                                     },
+                                    exec_event.cause,
                                 );
-                                deny_event.cause = exec_event.cause;
-                                self.event_queue.push(ScheduledEvent(deny_event));
                             }
                         }
-                    } else {
-                        self.next_event_id += 1;
-                        let mut deny_event = Event::new(
-                            EventId(self.next_event_id),
-                            self.clock,
+                    }
+                    None => {
+                        self.push_internal(
                             requester,
                             requester,
                             EventPayload::ResourceDenied {
@@ -192,93 +223,100 @@ impl Simulation {
                                 amount,
                                 reason: format!("Resource #{} not found", resource_id.0),
                             },
+                            exec_event.cause,
                         );
-                        deny_event.cause = exec_event.cause;
-                        self.event_queue.push(ScheduledEvent(deny_event));
-                    }
-                }
-                EventPayload::ResourceReleased {
-                    resource_id,
-                    amount,
-                    releaser: _,
-                } => {
-                    let resource_id = *resource_id;
-                    let amount = *amount;
-
-                    if let Some(res) = self.resources.get_mut(&resource_id) {
-                        let granted_list = res.release(amount);
-                        for granted in granted_list {
-                            self.next_event_id += 1;
-                            let mut grant_event = Event::new(
-                                EventId(self.next_event_id),
-                                self.clock,
-                                granted.requester,
-                                granted.requester,
-                                EventPayload::ResourceGranted {
-                                    resource_id: res.id,
-                                    amount: granted.amount,
-                                },
-                            );
-                            // Link cause of unblocking directly to the release event!
-                            grant_event.cause = Some(current_trace_id);
-                            self.event_queue.push(ScheduledEvent(grant_event));
-                        }
-                    }
-                }
-                _ => {}
-            }
-
-            // 4. Dispatch to target component with SimulationContext
-            if let Some(component) = self.components.get_mut(&event.target) {
-                let mut ctx = SimulationContext::new(
-                    self.clock,
-                    &mut self.causal_graph,
-                    self.tracing_mode,
-                );
-                let new_events = component.handle_event(&exec_event, &mut ctx);
-
-                for mut new_event in new_events {
-                    // Attach causality link to generated events if missing
-                    if new_event.cause.is_none() {
-                        new_event.cause = Some(current_trace_id);
-                    }
-
-                    // Route PortSignal outputs through registered connections
-                    if let EventPayload::PortSignal { port_id, ref value } = new_event.payload {
-                        let source = new_event.source;
-                        let cause = new_event.cause;
-
-                        let targets: Vec<_> = self
-                            .connections
-                            .iter()
-                            .filter(|c| c.source_component == source && c.source_port == port_id)
-                            .map(|c| (c.target_component, c.target_port))
-                            .collect();
-
-                        for (target_comp, target_port) in targets {
-                            self.next_event_id += 1;
-                            let mut fwd = Event::new(
-                                EventId(self.next_event_id),
-                                new_event.time,
-                                source,
-                                target_comp,
-                                EventPayload::PortSignal {
-                                    port_id: target_port,
-                                    value: value.clone(),
-                                },
-                            );
-                            fwd.cause = cause;
-                            self.event_queue.push(ScheduledEvent(fwd));
-                        }
-                    } else {
-                        self.event_queue.push(ScheduledEvent(new_event));
                     }
                 }
             }
-            Some(event)
-        } else {
-            None
+            EventPayload::ResourceReleased {
+                resource_id,
+                amount,
+                releaser: _,
+            } => {
+                let resource_id = *resource_id;
+                let amount = *amount;
+
+                let granted_list = if let Some(res) = self.resources.get_mut(&resource_id) {
+                    res.release(amount)
+                } else {
+                    Vec::new()
+                };
+
+                for granted in granted_list {
+                    // Link the unblocking directly to the release event.
+                    self.push_internal(
+                        granted.requester,
+                        granted.requester,
+                        EventPayload::ResourceGranted {
+                            resource_id,
+                            amount: granted.amount,
+                        },
+                        current_trace_id,
+                    );
+                }
+            }
+            _ => {}
         }
+
+        // 4. Dispatch to the target component.
+        if let Some(component) = self.components.get_mut(&event.target) {
+            let mut ctx =
+                SimulationContext::new(self.clock, &mut self.causal_graph, self.tracing_mode);
+            let new_events = component.handle_event(&exec_event, &mut ctx);
+
+            for new_event in new_events {
+                let cause = new_event.cause.or(current_trace_id);
+
+                // Route PortSignal outputs through registered connections.
+                if let EventPayload::PortSignal { port_id, ref value } = new_event.payload {
+                    let source = new_event.source;
+                    let targets: Vec<_> = self
+                        .connections
+                        .iter()
+                        .filter(|c| c.source_component == source && c.source_port == port_id)
+                        .map(|c| (c.target_component, c.target_port))
+                        .collect();
+
+                    for (target_comp, target_port) in targets {
+                        let id = self.next_id();
+                        let mut fwd = Event::new(
+                            id,
+                            new_event.time,
+                            source,
+                            target_comp,
+                            EventPayload::PortSignal {
+                                port_id: target_port,
+                                value: value.clone(),
+                            },
+                        );
+                        fwd.cause = cause;
+                        self.event_queue.push(ScheduledEvent(fwd));
+                    }
+                } else {
+                    let id = self.next_id();
+                    let mut e = new_event;
+                    e.id = id;
+                    e.cause = cause;
+                    self.event_queue.push(ScheduledEvent(e));
+                }
+            }
+        }
+
+        Some(event)
+    }
+
+    /// Push an engine-generated event, assigning it a fresh authoritative id.
+    fn push_internal(
+        &mut self,
+        source: ComponentId,
+        target: ComponentId,
+        payload: EventPayload,
+        cause: Option<TraceId>,
+    ) {
+        let id = self.next_id();
+        let mut event = Event::new(id, self.clock, source, target, payload);
+        event.cause = cause;
+        self.event_queue.push(ScheduledEvent(event));
     }
 
     pub fn run_until(&mut self, until: SimulationTime) {

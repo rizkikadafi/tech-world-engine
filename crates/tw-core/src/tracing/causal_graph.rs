@@ -4,9 +4,26 @@ use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum TracingMode {
+    /// No causal nodes are recorded. Observation/event log still works.
+    /// Use this for large simulations where memory must not grow with events.
+    Off,
+    /// Records one causal node per executed event (black-box level).
     #[default]
     Abstract,
+    /// Records additional nodes for composite internal routing (deep refinement).
     Hierarchical,
+}
+
+impl TracingMode {
+    /// Whether any causal information should be recorded.
+    pub fn is_enabled(self) -> bool {
+        !matches!(self, TracingMode::Off)
+    }
+
+    /// Whether composite-internal routing nodes should be recorded.
+    pub fn is_hierarchical(self) -> bool {
+        matches!(self, TracingMode::Hierarchical)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

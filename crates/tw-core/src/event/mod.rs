@@ -66,4 +66,19 @@ impl Event {
         self.cause = Some(cause);
         self
     }
+
+    /// Build an event whose [`EventId`] is a placeholder (`0`).
+    ///
+    /// The simulation assigns the real id when the event is scheduled, so
+    /// components should prefer this constructor instead of inventing ids
+    /// (e.g. `EventId(event.id.0 + 10)`), which can collide with engine ids
+    /// and break same-tick ordering determinism.
+    pub fn at(
+        time: SimulationTime,
+        source: ComponentId,
+        target: ComponentId,
+        payload: EventPayload,
+    ) -> Self {
+        Self::new(EventId(0), time, source, target, payload)
+    }
 }
