@@ -7,3 +7,11 @@ license.workspace = true
 
 [dependencies]
 tw-core = { path = "../tw-core" }
+log = "0.4"
+
+[dev-dependencies]
+criterion = "0.7"
+
+[[bench]]
+name = "scaling"
+harness = false

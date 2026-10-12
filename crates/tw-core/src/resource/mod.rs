@@ -144,11 +144,24 @@ pub struct GrantedRequest {
     pub cause: Option<TraceId>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ResourceError {
+    /// The request's amount kind does not match the resource capacity kind.
+    #[error("requested amount is {actual} but resource capacity is {expected}")]
+    KindMismatch {
+        actual: &'static str,
+        expected: &'static str,
+    },
+    /// The request asks for more than the resource can ever provide.
+    #[error("requested amount {requested} exceeds total resource capacity {capacity}")]
+    ExceedsCapacity { requested: String, capacity: String },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResourceRequestResult {
     Granted,
     Queued { queue_position: usize },
-    Invalid { reason: String },
+    Invalid { reason: ResourceError },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -275,20 +288,19 @@ impl Resource {
 
         if amount.kind() != self.capacity.kind() {
             return ResourceRequestResult::Invalid {
-                reason: format!(
-                    "Requested amount is {} but resource capacity is {}",
-                    amount.kind(),
-                    self.capacity.kind()
-                ),
+                reason: ResourceError::KindMismatch {
+                    actual: amount.kind(),
+                    expected: self.capacity.kind(),
+                },
             };
         }
 
         if self.capacity.checked_sub(&amount).is_none() {
             return ResourceRequestResult::Invalid {
-                reason: format!(
-                    "Requested amount {} exceeds total resource capacity {}",
-                    amount, self.capacity
-                ),
+                reason: ResourceError::ExceedsCapacity {
+                    requested: amount.to_string(),
+                    capacity: self.capacity.to_string(),
+                },
             };
         }
 

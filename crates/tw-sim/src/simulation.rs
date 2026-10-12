@@ -1,3 +1,4 @@
+use crate::config::SimulationConfig;
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
 use tw_core::{
@@ -56,8 +57,9 @@ pub struct Simulation {
     connections: Vec<Connection>,
     observers: Vec<Box<dyn Observer>>,
     causal_graph: CausalGraph,
-    tracing_mode: TracingMode,
+    config: SimulationConfig,
     next_event_id: u64,
+    processed_events: u64,
 }
 
 impl Simulation {
@@ -65,22 +67,45 @@ impl Simulation {
         Self::default()
     }
 
+    /// Create a simulation with explicit [`SimulationConfig`].
+    pub fn with_config(config: SimulationConfig) -> Self {
+        Self {
+            config,
+            ..Self::default()
+        }
+    }
+
+    /// Replace the engine configuration (tracing mode, event cap, seed).
+    pub fn configure(&mut self, config: SimulationConfig) {
+        self.config = config;
+    }
+
+    /// Current engine configuration.
+    pub fn config(&self) -> SimulationConfig {
+        self.config
+    }
+
+    /// Number of events executed so far, for progress and benchmarking.
+    pub fn events_processed(&self) -> u64 {
+        self.processed_events
+    }
+
     pub fn current_time(&self) -> SimulationTime {
         self.clock
     }
 
     pub fn set_tracing_mode(&mut self, mode: TracingMode) {
-        self.tracing_mode = mode;
+        self.config.tracing_mode = mode;
     }
 
     pub fn tracing_mode(&self) -> TracingMode {
-        self.tracing_mode
+        self.config.tracing_mode
     }
 
     pub fn register_component(&mut self, mut component: Box<dyn Component>) {
         let mount_events = {
             let mut ctx =
-                SimulationContext::new(self.clock, &mut self.causal_graph, self.tracing_mode);
+                SimulationContext::new(self.clock, &mut self.causal_graph, self.config.tracing_mode);
             component.on_mount(&mut ctx)
         };
         self.components.insert(component.id(), component);
@@ -112,7 +137,7 @@ impl Simulation {
         for id in component_ids {
             let events = {
                 let mut ctx =
-                    SimulationContext::new(self.clock, &mut self.causal_graph, self.tracing_mode);
+                    SimulationContext::new(self.clock, &mut self.causal_graph, self.config.tracing_mode);
                 match self.components.get_mut(&id) {
                     Some(component) => component.on_unmount(&mut ctx),
                     None => Vec::new(),
@@ -201,11 +226,30 @@ impl Simulation {
     }
 
     pub fn step(&mut self) -> Option<Event> {
+        if let Some(max) = self.config.max_events {
+            if self.processed_events >= max {
+                log::warn!(
+                    "max_events limit ({max}) reached at t={:?}; stopping run loop",
+                    self.clock
+                );
+                return None;
+            }
+        }
+
         let ScheduledEvent(event) = self.event_queue.pop()?;
+        self.processed_events += 1;
         self.clock = event.time;
 
+        log::trace!(
+            "t={:?} executing #{:?} {:?} -> #{}",
+            event.time,
+            event.id.0,
+            event.payload,
+            event.target.0
+        );
+
         // 1. Record event execution in the causal graph (unless tracing is off).
-        let current_trace_id = if self.tracing_mode.is_enabled() {
+        let current_trace_id = if self.config.tracing_mode.is_enabled() {
             let target_name = self
                 .components
                 .get(&event.target)
@@ -267,7 +311,7 @@ impl Simulation {
                                 );
                             }
                             ResourceRequestResult::Queued { queue_position } => {
-                                if self.tracing_mode.is_enabled() {
+                                if self.config.tracing_mode.is_enabled() {
                                     self.causal_graph.record_event(
                                         exec_event.id,
                                         self.clock,
@@ -286,7 +330,7 @@ impl Simulation {
                                     EventPayload::ResourceDenied {
                                         resource_id,
                                         amount,
-                                        reason,
+                                        reason: reason.to_string(),
                                     },
                                     exec_event.cause,
                                 );
@@ -343,7 +387,7 @@ impl Simulation {
         // 4. Dispatch to the target component.
         if let Some(component) = self.components.get_mut(&event.target) {
             let mut ctx =
-                SimulationContext::new(self.clock, &mut self.causal_graph, self.tracing_mode);
+                SimulationContext::new(self.clock, &mut self.causal_graph, self.config.tracing_mode);
             let new_events = component.handle_event(&exec_event, &mut ctx);
 
             for new_event in new_events {
@@ -447,7 +491,9 @@ impl Simulation {
             if next_event.time > until {
                 break;
             }
-            self.step();
+            if self.step().is_none() {
+                break;
+            }
         }
     }
 }

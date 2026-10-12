@@ -26,6 +26,8 @@ Scenarios:
 ";
 
 fn main() -> ExitCode {
+    env_logger::init();
+
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("run") => run(args.get(1).map(String::as_str)),
@@ -54,10 +56,34 @@ fn read_state(engine: &SimulationEngine, id: ComponentId, key: &str) -> Option<S
         .map(|v| v.to_string())
 }
 
+/// Wrap a scenario's `Simulation` in an engine, applying configuration overrides
+/// from the environment (`TW_MAX_EVENTS`, `TW_SEED`). Engine logs are controlled
+/// separately by `RUST_LOG` (see `env_logger`).
+fn build_engine(simulation: tw_sim::Simulation) -> SimulationEngine {
+    let mut engine = SimulationEngine::new(simulation);
+    apply_env_config(&mut engine);
+    engine
+}
+
+fn apply_env_config(engine: &mut SimulationEngine) {
+    let mut config = engine.simulation().config();
+    if let Some(n) = env_u64("TW_MAX_EVENTS") {
+        config.max_events = Some(n);
+    }
+    if let Some(n) = env_u64("TW_SEED") {
+        config.seed = n;
+    }
+    engine.simulation_mut().configure(config);
+}
+
+fn env_u64(key: &str) -> Option<u64> {
+    std::env::var(key).ok()?.trim().parse().ok()
+}
+
 fn run(scenario: Option<&str>) -> ExitCode {
     match scenario {
         Some("counter") => {
-            let mut engine = SimulationEngine::new(counter::build(5, 5));
+            let mut engine = build_engine(counter::build(5, 5));
             engine.run_ticks(100);
             println!(
                 "counter: final count = {}",
@@ -66,7 +92,7 @@ fn run(scenario: Option<&str>) -> ExitCode {
             ExitCode::SUCCESS
         }
         Some("resource-contention") => {
-            let mut engine = SimulationEngine::new(resource_contention::build());
+            let mut engine = build_engine(resource_contention::build());
             while engine.simulation_mut().step().is_some() {}
             for (label, id) in [
                 ("Worker1", resource_contention::WORKER1_ID),
@@ -81,7 +107,7 @@ fn run(scenario: Option<&str>) -> ExitCode {
             ExitCode::SUCCESS
         }
         Some("disk-service") => {
-            let mut engine = SimulationEngine::new(disk_service::build());
+            let mut engine = build_engine(disk_service::build());
             while engine.simulation_mut().step().is_some() {}
             println!("job | arrived | granted | latency");
             for (id, latency) in disk_service::latencies(&engine) {
@@ -100,7 +126,8 @@ fn run(scenario: Option<&str>) -> ExitCode {
             let mut ok = true;
             for i in 0..8u8 {
                 let (a, b, cin) = ((i >> 2) & 1, (i >> 1) & 1, i & 1);
-                let engine = digital::run_full_adder(a, b, cin, tw_core::TracingMode::Abstract);
+                let mut engine = digital::run_full_adder(a, b, cin, tw_core::TracingMode::Abstract);
+                apply_env_config(&mut engine);
                 let got = match digital::full_adder_result(&engine) {
                     Some(v) => v,
                     None => {
@@ -137,7 +164,7 @@ fn run(scenario: Option<&str>) -> ExitCode {
 fn inspect(scenario: Option<&str>) -> ExitCode {
     match scenario {
         Some("counter") => {
-            let mut engine = SimulationEngine::new(counter::build(5, 5));
+            let mut engine = build_engine(counter::build(5, 5));
             engine.run_ticks(100);
             println!("components: {}", engine.simulation().component_count());
             println!(
@@ -147,7 +174,7 @@ fn inspect(scenario: Option<&str>) -> ExitCode {
             ExitCode::SUCCESS
         }
         Some("resource-contention") => {
-            let mut engine = SimulationEngine::new(resource_contention::build());
+            let mut engine = build_engine(resource_contention::build());
             while engine.simulation_mut().step().is_some() {}
             println!("components: {}", engine.simulation().component_count());
             for (label, id) in [
@@ -163,7 +190,7 @@ fn inspect(scenario: Option<&str>) -> ExitCode {
             ExitCode::SUCCESS
         }
         Some("disk-service") => {
-            let mut engine = SimulationEngine::new(disk_service::build());
+            let mut engine = build_engine(disk_service::build());
             while engine.simulation_mut().step().is_some() {}
             println!("components: {}", engine.simulation().component_count());
             for (label, id) in [
@@ -179,7 +206,8 @@ fn inspect(scenario: Option<&str>) -> ExitCode {
             ExitCode::SUCCESS
         }
         Some("full-adder") => {
-            let engine = digital::run_full_adder(1, 1, 1, tw_core::TracingMode::Abstract);
+            let mut engine = digital::run_full_adder(1, 1, 1, tw_core::TracingMode::Abstract);
+            apply_env_config(&mut engine);
             println!("components: {}", engine.simulation().component_count());
             println!("probe.sum   = {}", read_state(&engine, digital::PROBE_ID, "sum").unwrap_or_default());
             println!("probe.carry = {}", read_state(&engine, digital::PROBE_ID, "carry").unwrap_or_default());

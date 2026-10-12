@@ -19,7 +19,7 @@ pub use component::{
 pub use connection::Connection;
 pub use resource::{
     AllocationPolicy, Amount, FifoPolicy, GrantedRequest, PendingRequest, PriorityPolicy, Resource,
-    ResourceId, ResourceRequestResult, ResourceSnapshot,
+    ResourceError, ResourceId, ResourceRequestResult, ResourceSnapshot,
 };
 pub use observation::{EventLogObserver, Observer};
 pub use tracing::{CausalEdge, CausalGraph, TraceId, TraceNode, TracingMode};

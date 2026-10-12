@@ -157,7 +157,9 @@ fn continuous_capacity_supports_fractional_allocation() {
 fn amount_kind_must_match_capacity() {
     let mut res = resource(10);
     match res.request(ComponentId(1), 1.5f64, None) {
-        ResourceRequestResult::Invalid { reason } => assert!(reason.contains("capacity")),
+        ResourceRequestResult::Invalid { reason } => {
+            assert!(reason.to_string().contains("capacity"));
+        }
         other => panic!("expected Invalid, got {other:?}"),
     }
 }
