@@ -55,7 +55,7 @@ RUST_LOG=tw_sim=trace TW_MAX_EVENTS=5 cargo run -p tw-cli -- run counter
 ```text
 crates/      workspace members (tw-core, tw-sim, tw-cli)
 models/      domain models built on the engine (placeholder for now)
-docs/        design documents
+docs/        design documents (docs/implementation.md summarizes P0–P2)
 ```
 
 ## Benchmarks
