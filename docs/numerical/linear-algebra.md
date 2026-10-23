@@ -365,5 +365,8 @@ Literatur:
 
 Dokumen internal:
 
+- `linear-algebra-foundations.md` — **fondasi pengertian**: penjelasan istilah
+  (fill-in, ordering, Markowitz, simbolik/numerik, MNA, dst.) dari dasar, untuk
+  dibaca sebelum dokumen ini.
 - `overview.md` — peta besar `tw-num`.
 - `time-model.md` — relevansi waktu diskret vs kontinu.

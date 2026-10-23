@@ -195,6 +195,10 @@ Phase 8 circuit solver
 Folder `docs/numerical/` akan menampung dokumen per-teori:
 
 - `overview.md` — **dokumen ini** (peta besar).
+- `linear-algebra-foundations.md` — **selesai.** Fondasi pengertian aljabar
+  linear: dari `A x = b` sampai fill-in, ordering, MNA, dan analisis
+  simbolik/numerik. Titik masuk bila istilah di `linear-algebra.md` belum
+  familier.
 - `linear-algebra.md` — **selesai.** LU, partial pivoting, sparse (CSR/CCS),
   fill-in, Markowitz/AMD, analisis simbolik vs numerik.
 - `nonlinear.md` — Newton-Raphson, Jacobian, konvergensi berlapis, gmin/source

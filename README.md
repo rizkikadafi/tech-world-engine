@@ -55,8 +55,20 @@ RUST_LOG=tw_sim=trace TW_MAX_EVENTS=5 cargo run -p tw-cli -- run counter
 ```text
 crates/      workspace members (tw-core, tw-sim, tw-cli)
 models/      domain models built on the engine (placeholder for now)
-docs/        design documents (implementation.md, time-model.md, numerical/)
+docs/        design documents (see below)
 ```
+
+## Documentation
+
+| Document | Contents |
+| --- | --- |
+| `docs/implementation.md` | What is actually implemented today, and its limits. |
+| `docs/engine.md` | Roadmap variant — Phase 0 to 12. |
+| `docs/engine-v1.md` | Roadmap variant — Phase 0 to 16, including the Godot phase. |
+| `docs/plan.md` | Architecture and system design. |
+| `docs/godot-integration.md` | How the engine will be integrated into Godot (plan). |
+| `docs/time-model.md` | Time model: fixed-point ticks, limits, sync options. |
+| `docs/numerical/overview.md` | Numerical foundation (Phase 6) — map. |
 
 ## Benchmarks
 
