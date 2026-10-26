@@ -5,6 +5,7 @@ members = [
     "crates/tw-sim",
     "crates/tw-cli",
     "crates/tw-num",
+    "models/electrical",
 ]
 
 [workspace.package]

@@ -140,3 +140,20 @@ impl Mul<f64> for Vector {
         Vector { data: out }
     }
 }
+
+impl std::ops::Index<usize> for Vector {
+    type Output = f64;
+
+    #[inline]
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.data[index]
+    }
+}
+
+impl std::ops::IndexMut<usize> for Vector {
+    #[inline]
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.data[index]
+    }
+}
+

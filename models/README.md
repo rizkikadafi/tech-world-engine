@@ -14,6 +14,7 @@ domain concept is a *model*, not part of the engine.
 - The engine must keep compiling and testing with this directory empty.
 - Prefer keeping model state in `State` so checkpointing/observers work.
 
-This directory is a placeholder. Concrete models will be added as their own
-crates or modules once the numerical foundation (Phase 6: matrices, sparse
-representations, linear/nonlinear solvers) is in place.
+## Crates in `models/`
+
+- [`electrical/`](file:///home/rkcode/Projects/tech-world-engine/models/electrical) (`tw-electrical`): Phase 7 & 8 circuit representation, automated MNA stamping, DC OP and Transient solver using `tw-num`.
+

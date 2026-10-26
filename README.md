@@ -13,11 +13,15 @@ Domain concepts are modeled as *components*, *ports*, *connections*, and
 | `tw-core` | Pure primitives: time, state, events, components, ports, connections, resources, observation, and causal tracing. **No** simulation loop. |
 | `tw-sim` | The engine that runs it: `Simulation`, `SimulationEngine`, shared scenarios, checkpointing, and configuration. |
 | `tw-cli` | Thin command-line interface. Contains **no** simulation logic. |
+| `tw-num` | Domain-agnostic numerical foundation (Phase 6): Dense LU, matrix/vector, linear solve. |
+| `tw-electrical` | Domain electrical models (Phase 7 & 8): Circuit netlist, automated MNA stamping, DC OP and Transient solver. |
 
 The dependency direction is one-way:
 
 ```text
 tw-cli  →  tw-sim  →  tw-core
+                           ▲
+models/electrical ─────────┴──► tw-num
 ```
 
 ## Quick start
@@ -69,6 +73,8 @@ docs/        design documents (see below)
 | `docs/godot-integration.md` | How the engine will be integrated into Godot (plan). |
 | `docs/time-model.md` | Time model: fixed-point ticks, limits, sync options. |
 | `docs/numerical/overview.md` | Numerical foundation (Phase 6) — map. |
+| `docs/numerical/basics_resistor_rc.md` | Basic theory: Resistor, MNA, and RC transient (Backward Euler). |
+| `docs/electrical-simulation.md` | Electrical domain models, automated MNA stamping, and circuit solvers (Phase 7 & 8). |
 
 ## Benchmarks
 

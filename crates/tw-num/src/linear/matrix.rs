@@ -136,3 +136,24 @@ impl Matrix {
         Ok(Self { rows, cols, data })
     }
 }
+
+impl std::ops::Index<(usize, usize)> for Matrix {
+    type Output = f64;
+
+    #[inline]
+    fn index(&self, index: (usize, usize)) -> &Self::Output {
+        let (r, c) = index;
+        assert!(r < self.rows && c < self.cols, "matrix index out of bounds: ({}, {}) for {}x{}", r, c, self.rows, self.cols);
+        &self.data[r * self.cols + c]
+    }
+}
+
+impl std::ops::IndexMut<(usize, usize)> for Matrix {
+    #[inline]
+    fn index_mut(&mut self, index: (usize, usize)) -> &mut Self::Output {
+        let (r, c) = index;
+        assert!(r < self.rows && c < self.cols, "matrix index out of bounds: ({}, {}) for {}x{}", r, c, self.rows, self.cols);
+        &mut self.data[r * self.cols + c]
+    }
+}
+

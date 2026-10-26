@@ -1,0 +1,11 @@
+[package]
+name = "tw-electrical"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+tw-core = { path = "../../crates/tw-core" }
+tw-num = { path = "../../crates/tw-num" }
+thiserror = "2"
