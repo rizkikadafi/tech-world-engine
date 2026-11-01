@@ -1,6 +1,6 @@
-# Domain Rangkaian Listrik & Transistor-Level MNA Solver (`tw-electrical`)
+# Domain Rangkaian Listrik & CMOS Logic Gates Solver (`tw-electrical`)
 
-Dokumen ini menjelaskan **implementasi domain rangkaian listrik (Phase 7)**, **solver rangkaian MNA (Phase 8)**, **device non-linear (Phase 9)**, dan **simulasi level transistor (Phase 10)** yang berada di [`models/electrical/`](file:///home/rkcode/Projects/tech-world-engine/models/electrical) (package `tw-electrical`).
+Dokumen ini menjelaskan **implementasi domain rangkaian listrik (Phase 7)**, **solver rangkaian MNA (Phase 8)**, **device non-linear (Phase 9)**, **simulasi level transistor (Phase 10)**, dan **gerbang logika CMOS & subcircuit modular (Phase 11 — Milestone Besar #1)** yang berada di [`models/electrical/`](file:///home/rkcode/Projects/tech-world-engine/models/electrical) (package `tw-electrical`).
 
 ---
 
@@ -184,6 +184,21 @@ Pengujian integrasi otomatis berada di direktori `models/electrical/tests/`:
    - $V_{in} = 2.5\text{ V}$ (Threshold tengah) $\implies V_{out} \approx 2.5\text{ V}$.
 3. **CMOS Transient Discharge**: Kapasitor beban $10\text{ pF}$ terisi $5\text{ V}$ lalu di-discharge oleh NMOS saat input switched HIGH. Tegangan turun secara monotonik ke $< 0.1\text{ V}$.
 
+### E. Gerbang Logika CMOS & Subcircuits (`tests/cmos_gates.rs`)
+1. **CMOS NAND Gate**: 2 PMOS paralel antara VDD dan OUT, 2 NMOS seri antara OUT dan GND.
+   - Terverifikasi pada 4 kombinasi tabel kebenaran ($00 \to 1, 01 \to 1, 10 \to 1, 11 \to 0$) dengan level logika mantap ($> 4.8\text{V}$ dan $< 0.2\text{V}$).
+2. **CMOS NOR Gate**: 2 PMOS seri antara VDD dan OUT, 2 NMOS paralel antara OUT dan GND.
+   - Terverifikasi pada 4 kombinasi tabel kebenaran ($00 \to 1, 01 \to 0, 10 \to 0, 11 \to 0$).
+3. **Compound CMOS AND Gate**: Gerbang NAND dikaskade dengan inverter CMOS, terverifikasi menghasilkan fungsi logika AND.
+
+### F. Memori Fisik Sekuensial: SR Latch (`tests/sr_latch.rs`)
+1. **Bistable Memory Retention**: Dua gerbang CMOS NOR dirangkai secara *cross-coupled* dengan kapasitor simpan muatan ($1\text{ pF}$).
+   - **SET Phase** ($S=5\text{V}, R=0\text{V}$): $Q$ terisi muatan hingga $> 4.5\text{V}$, $\bar{Q} < 0.5\text{V}$.
+   - **HOLD Phase 1** ($S=0\text{V}, R=0\text{V}$): Input dilepas, state $Q$ tetap bertahan $> 4.5\text{V}$.
+   - **RESET Phase** ($S=0\text{V}, R=5\text{V}$): $Q$ dikosongkan ke $< 0.5\text{V}$, $\bar{Q}$ terisi $> 4.5\text{V}$.
+   - **HOLD Phase 2** ($S=0\text{V}, R=0\text{V}$): Input dilepas, state $Q$ tetap bertahan $< 0.5\text{V}$.
+   - **Kesimpulan**: Memori 1-bit berhasil tercipta murni dari dinamika medan listrik transistor fisik tanpa percabangan logika software (`if/else`).
+
 Jalankan seluruh pengujian dengan perintah:
 ```bash
 cargo test -p tw-electrical
@@ -193,9 +208,11 @@ cargo test -p tw-electrical
 
 ## 6. Roadmap Lanjutan (Next Steps)
 
-1. **Subcircuits & Hierarchical Logic Gates (NAND, NOR, D-Flip-Flop)**:
-   - Membangun gerbang logika berstruktur hierarkis dari MOSFET dan resistor.
+1. **Complex Digital Units (Half Adder, Full Adder, D-Flip-Flop)**:
+   - Menyusun unit aritmatika dan register dari gerbang CMOS `Subcircuit`.
 2. **Adaptive Timestep & LTE Control (Phase 6 / N4)**:
    - Memilih $\Delta t$ secara dinamis berdasarkan laju perubahan tegangan (*Local Truncation Error*).
 3. **Sparse Matrix Formulation (Phase 6 / N2)**:
    - Mengalihkan backend `tw-electrical` dari dense matrix ke sparse matrix (`CSR`/`CSC` + Markowitz LU) untuk rangkaian dengan ratusan/ribuan gerbang logika.
+4. **Phase 12: Multi-Fidelity & Mixed-Signal Bridge**:
+   - Menghubungkan solver sirkuit analog ke discrete-event core (`tw-core`/`tw-sim`).

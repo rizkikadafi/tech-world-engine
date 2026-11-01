@@ -182,4 +182,14 @@ impl Circuit {
     pub fn is_nonlinear(&self) -> bool {
         !self.diodes.is_empty() || !self.mosfets.is_empty()
     }
+
+    /// Instantiates a subcircuit into the circuit with given port bindings.
+    pub fn instantiate_subcircuit(
+        &mut self,
+        instance_name: &str,
+        template: &crate::subcircuit::Subcircuit,
+        port_bindings: &[(&str, NodeId)],
+    ) -> Result<(), CircuitError> {
+        template.instantiate(self, instance_name, port_bindings)
+    }
 }
