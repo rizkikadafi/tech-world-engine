@@ -1,6 +1,6 @@
-# Domain Rangkaian Listrik & MNA Solver (`tw-electrical`)
+# Domain Rangkaian Listrik & Transistor-Level MNA Solver (`tw-electrical`)
 
-Dokumen ini menjelaskan **implementasi domain rangkaian listrik (Phase 7)** dan **solver rangkaian berbasis Modified Nodal Analysis (Phase 8)** yang berada di [`models/electrical/`](file:///home/rkcode/Projects/tech-world-engine/models/electrical) (package `tw-electrical`).
+Dokumen ini menjelaskan **implementasi domain rangkaian listrik (Phase 7)**, **solver rangkaian MNA (Phase 8)**, **device non-linear (Phase 9)**, dan **simulasi level transistor (Phase 10)** yang berada di [`models/electrical/`](file:///home/rkcode/Projects/tech-world-engine/models/electrical) (package `tw-electrical`).
 
 ---
 
@@ -41,11 +41,13 @@ Rangkaian direpresentasikan sebagai graf berarah dengan node dan cabang (*branch
 - String `"0"`, `"GND"`, dan `"gnd"` otomatis dipetakan ke `NodeId::GROUND`.
 
 ### B. Device Model
-Tersedia 4 elemen sirkuit dasar di [`models/electrical/src/device.rs`](file:///home/rkcode/Projects/tech-world-engine/models/electrical/src/device.rs):
+Tersedia 6 elemen sirkuit dasar di [`models/electrical/src/device.rs`](file:///home/rkcode/Projects/tech-world-engine/models/electrical/src/device.rs):
 1. **Resistor ($R$)**: Hubungan linier $V = I \cdot R$ dengan konduktansi $G = 1/R$.
 2. **Capacitor ($C$)**: Hubungan diferensial $I = C \frac{dV}{dt}$.
 3. **Independent Voltage Source ($V_{src}$)**: Menetapkan beda potensial ideal $V_{pos} - V_{neg} = V_{src}$.
 4. **Independent Current Source ($I_{src}$)**: Mengalirkan arus konstan dari terminal negatif ke terminal positif.
+5. **Diode ($D$)**: Model Shockley $I_D = I_S \left(e^{V_D / (\eta V_T)} - 1\right)$ dengan ekstrapolasi linier untuk mencegah overflow floating-point.
+6. **MOSFET (NMOS & PMOS Level 1)**: Model Shichman-Hodges dengan 3 daerah kerja (Cutoff, Triode/Linear, Saturation) dan modulasi panjang kanal $\lambda$.
 
 ### C. Circuit Netlist Builder
 [`Circuit`](file:///home/rkcode/Projects/tech-world-engine/models/electrical/src/circuit.rs) menyediakan builder API untuk merangkai komponen:
@@ -170,6 +172,18 @@ Pengujian integrasi otomatis berada di direktori `models/electrical/tests/`:
    - Kapasitor diberi tegangan awal $V_0 = 10\text{ V}$ lalu dilepas ke resistor tanpa sumber.
    - Hasil dibandingkan dengan solusi analitik $V(t) = V_0 e^{-t / RC}$ dengan galat relatif $< 1\%$.
 
+### C. Rangkaian Dioda (`tests/diode_circuits.rs`)
+1. **Diode Forward Bias**: Menguji dioda silikon dengan resistor $1\text{ k}\Omega$ pada $5\text{ V}$. Dioda terkonvergensi pada penurunan tegangan $0.65\text{ V} - 0.75\text{ V}$ dan memenuhi KCL hukum Shockley dengan galat $< 2\%$.
+2. **Diode Reverse Bias**: Menguji tegangan mundur $-5\text{ V}$. Dioda memblokir arus sehingga arus mendekati 0 dan tegangan katoda mendekati $-5\text{ V}$.
+
+### D. Rangkaian MOSFET & CMOS Inverter (`tests/mosfet_circuits.rs`)
+1. **NMOS Resistive Inverter**: Sakelar NMOS dengan pull-up $10\text{ k}\Omega$. Ketika $V_{in} = 0\text{ V}$ (Cutoff), $V_{out} = 5.0\text{ V}$. Ketika $V_{in} = 5.0\text{ V}$ (Triode), $V_{out} < 0.2\text{ V}$.
+2. **CMOS Inverter Logic Levels**: Pasangan komplementer NMOS dan PMOS:
+   - $V_{in} = 0.0\text{ V}$ (Logic LOW) $\implies V_{out} \approx 5.0\text{ V}$ (Logic HIGH).
+   - $V_{in} = 5.0\text{ V}$ (Logic HIGH) $\implies V_{out} \approx 0.0\text{ V}$ (Logic LOW).
+   - $V_{in} = 2.5\text{ V}$ (Threshold tengah) $\implies V_{out} \approx 2.5\text{ V}$.
+3. **CMOS Transient Discharge**: Kapasitor beban $10\text{ pF}$ terisi $5\text{ V}$ lalu di-discharge oleh NMOS saat input switched HIGH. Tegangan turun secara monotonik ke $< 0.1\text{ V}$.
+
 Jalankan seluruh pengujian dengan perintah:
 ```bash
 cargo test -p tw-electrical
@@ -179,10 +193,9 @@ cargo test -p tw-electrical
 
 ## 6. Roadmap Lanjutan (Next Steps)
 
-1. **Phase 9: Device Non-Linear (Diode & Transistor)**
-   - Integrasi Newton-Raphson solver dari `tw-num` untuk menyelesaikan persamaan non-linear $I_D = I_S (e^{V_D / V_T} - 1)$.
-   - Companion model linierisasi Jacobian untuk dioda dan MOSFET.
-2. **Adaptive Timestep & LTE Control**:
+1. **Subcircuits & Hierarchical Logic Gates (NAND, NOR, D-Flip-Flop)**:
+   - Membangun gerbang logika berstruktur hierarkis dari MOSFET dan resistor.
+2. **Adaptive Timestep & LTE Control (Phase 6 / N4)**:
    - Memilih $\Delta t$ secara dinamis berdasarkan laju perubahan tegangan (*Local Truncation Error*).
-3. **Sparse Matrix Formulation (N2)**:
-   - Mengalihkan backend `tw-electrical` dari dense matrix ke sparse matrix (`CSR`/`CSC` + Markowitz LU) untuk rangkaian dengan ratusan/ribuan node.
+3. **Sparse Matrix Formulation (Phase 6 / N2)**:
+   - Mengalihkan backend `tw-electrical` dari dense matrix ke sparse matrix (`CSR`/`CSC` + Markowitz LU) untuk rangkaian dengan ratusan/ribuan gerbang logika.

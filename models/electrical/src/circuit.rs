@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::device::{Capacitor, CurrentSource, Resistor, VoltageSource};
+use crate::device::{Capacitor, CurrentSource, Diode, Mosfet, Resistor, VoltageSource};
 use crate::error::CircuitError;
 use crate::node::NodeId;
 
@@ -13,6 +13,8 @@ pub struct Circuit {
     pub capacitors: Vec<Capacitor>,
     pub voltage_sources: Vec<VoltageSource>,
     pub current_sources: Vec<CurrentSource>,
+    pub diodes: Vec<Diode>,
+    pub mosfets: Vec<Mosfet>,
 }
 
 impl Circuit {
@@ -25,6 +27,8 @@ impl Circuit {
             capacitors: Vec::new(),
             voltage_sources: Vec::new(),
             current_sources: Vec::new(),
+            diodes: Vec::new(),
+            mosfets: Vec::new(),
         };
         // Ground is node 0
         circuit.node_names.push("GND".to_string());
@@ -133,5 +137,49 @@ impl Circuit {
         self.current_sources
             .push(CurrentSource::new(name, pos, neg, current));
         self.current_sources.last().unwrap()
+    }
+
+    /// Adds a semiconductor diode.
+    pub fn add_diode(
+        &mut self,
+        name: impl Into<String>,
+        anode: NodeId,
+        cathode: NodeId,
+    ) -> &Diode {
+        self.diodes.push(Diode::new(name, anode, cathode));
+        self.diodes.last().unwrap()
+    }
+
+    /// Adds an NMOS transistor.
+    pub fn add_nmos(
+        &mut self,
+        name: impl Into<String>,
+        drain: NodeId,
+        gate: NodeId,
+        source: NodeId,
+        vth: f64,
+        beta: f64,
+    ) -> &Mosfet {
+        self.mosfets.push(Mosfet::new_nmos(name, drain, gate, source, vth, beta));
+        self.mosfets.last().unwrap()
+    }
+
+    /// Adds a PMOS transistor.
+    pub fn add_pmos(
+        &mut self,
+        name: impl Into<String>,
+        drain: NodeId,
+        gate: NodeId,
+        source: NodeId,
+        vth: f64,
+        beta: f64,
+    ) -> &Mosfet {
+        self.mosfets.push(Mosfet::new_pmos(name, drain, gate, source, vth, beta));
+        self.mosfets.last().unwrap()
+    }
+
+    /// Checks if the circuit contains nonlinear elements (diodes or MOSFETs).
+    pub fn is_nonlinear(&self) -> bool {
+        !self.diodes.is_empty() || !self.mosfets.is_empty()
     }
 }

@@ -18,4 +18,7 @@ pub enum NumericalError {
     /// Invalid size (e.g., zero dimension).
     #[error("invalid size")]
     InvalidSize,
+    /// Iterative method failed to converge within the allowed maximum iterations.
+    #[error("failed to converge after {iterations} iterations: {reason}")]
+    NoConvergence { iterations: usize, reason: String },
 }

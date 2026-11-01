@@ -59,13 +59,14 @@ impl Default for TransientResult {
 }
 
 /// Solves the DC Operating Point (capacitors treated as open circuits).
+/// Automatically uses Newton-Raphson if nonlinear components (Diodes, MOSFETs) are present.
 pub fn dc_op(circuit: &Circuit) -> Result<CircuitState, CircuitError> {
-    let mna = MnaSystem::build_dc(circuit)?;
-    mna.solve(circuit)
+    MnaSystem::solve_circuit(circuit, None, None)
 }
 
 /// Runs a transient analysis from t=0 to t_stop with fixed time step dt.
 /// If `initial_state` is None, an initial state with zero voltages is used.
+/// Automatically handles nonlinear devices across time steps.
 pub fn transient(
     circuit: &Circuit,
     t_stop: f64,
@@ -94,8 +95,11 @@ pub fn transient(
     let steps = (t_stop / dt).round() as usize;
     for step in 1..=steps {
         let t = step as f64 * dt;
-        let mna = MnaSystem::build_transient(circuit, dt, &current_state)?;
-        current_state = mna.solve(circuit)?;
+        current_state = MnaSystem::solve_circuit(
+            circuit,
+            Some((dt, &current_state)),
+            Some(&current_state),
+        )?;
         result.push(t, current_state.clone());
     }
 

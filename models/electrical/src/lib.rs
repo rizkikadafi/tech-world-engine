@@ -15,7 +15,7 @@ pub mod state;
 
 pub use analysis::{dc_op, transient, TransientResult};
 pub use circuit::Circuit;
-pub use device::{Capacitor, CurrentSource, Resistor, VoltageSource};
+pub use device::{Capacitor, CurrentSource, Diode, Mosfet, MosfetType, Resistor, VoltageSource};
 pub use error::CircuitError;
 pub use mna::MnaSystem;
 pub use node::NodeId;

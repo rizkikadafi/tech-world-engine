@@ -13,9 +13,11 @@
 
 pub mod error;
 pub mod linear;
+pub mod nonlinear;
 pub mod ode;
 pub mod prelude;
 
 pub use error::NumericalError;
 pub use linear::{solve, Matrix, Vector};
+pub use nonlinear::{newton_scalar, NewtonConfig, NewtonResult, NewtonSolver};
 pub use prelude::*;

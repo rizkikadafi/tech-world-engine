@@ -1,5 +1,6 @@
-use tw_num::linear::{Matrix, Vector};
+use tw_num::error::NumericalError;
 use tw_num::linear::dense::solve;
+use tw_num::linear::{Matrix, Vector};
 
 use crate::circuit::Circuit;
 use crate::error::CircuitError;
@@ -17,25 +18,24 @@ pub struct MnaSystem {
 
 impl MnaSystem {
     /// Builds the MNA system for DC operating point analysis.
-    /// Capacitors are treated as open circuits (omitted).
     pub fn build_dc(circuit: &Circuit) -> Result<Self, CircuitError> {
-        Self::build(circuit, None)
+        Self::build(circuit, None, None)
     }
 
     /// Builds the MNA system for a transient time step using Backward Euler.
-    /// `dt`: time step size.
-    /// `prev_state`: circuit state from the previous time step.
     pub fn build_transient(
         circuit: &Circuit,
         dt: f64,
         prev_state: &CircuitState,
     ) -> Result<Self, CircuitError> {
-        Self::build(circuit, Some((dt, prev_state)))
+        Self::build(circuit, Some((dt, prev_state)), None)
     }
 
-    fn build(
+    /// Builds the linearized MNA system at an optional operating point guess.
+    pub fn build(
         circuit: &Circuit,
         transient_info: Option<(f64, &CircuitState)>,
+        nonlinear_guess: Option<&CircuitState>,
     ) -> Result<Self, CircuitError> {
         let non_ground_nodes = circuit.non_ground_nodes();
         let num_nodes = non_ground_nodes.len();
@@ -142,6 +142,107 @@ impl MnaSystem {
             rhs[branch_row] += vsrc.voltage;
         }
 
+        // 5. Stamp Diodes (using linearized companion model)
+        for d in &circuit.diodes {
+            let p = node_idx(d.node_pos);
+            let n = node_idx(d.node_neg);
+            let vd = if let Some(guess) = nonlinear_guess {
+                guess.voltage(d.node_pos) - guess.voltage(d.node_neg)
+            } else {
+                0.0
+            };
+
+            let comp = d.companion(vd);
+            let gd = comp.g;
+            let ieq = comp.i_eq;
+
+            if let Some(i) = p {
+                matrix[(i, i)] += gd;
+                rhs[i] += ieq;
+            }
+            if let Some(j) = n {
+                matrix[(j, j)] += gd;
+                rhs[j] -= ieq;
+            }
+            if let (Some(i), Some(j)) = (p, n) {
+                matrix[(i, j)] -= gd;
+                matrix[(j, i)] -= gd;
+            }
+        }
+
+        // 6. Stamp MOSFETs (using linearized companion model)
+        for m in &circuit.mosfets {
+            let (vg, vd, vs) = if let Some(guess) = nonlinear_guess {
+                (
+                    guess.voltage(m.node_gate),
+                    guess.voltage(m.node_drain),
+                    guess.voltage(m.node_source),
+                )
+            } else {
+                (0.0, 0.0, 0.0)
+            };
+
+            let comp = m.companion(vg, vd, vs);
+            let gds = comp.g;
+            let gm = comp.gm;
+            let ieq = comp.i_eq;
+
+            let drain = node_idx(m.node_drain);
+            let gate = node_idx(m.node_gate);
+            let source = node_idx(m.node_source);
+
+            match m.mos_type {
+                crate::device::MosfetType::Nmos => {
+                    // NMOS: Current flows Drain -> Source
+                    if let Some(d) = drain {
+                        matrix[(d, d)] += gds;
+                        rhs[d] += ieq;
+                    }
+                    if let (Some(d), Some(g)) = (drain, gate) {
+                        matrix[(d, g)] += gm;
+                    }
+                    if let (Some(d), Some(s)) = (drain, source) {
+                        matrix[(d, s)] -= gds + gm;
+                    }
+
+                    if let Some(s) = source {
+                        matrix[(s, s)] += gds + gm;
+                        rhs[s] -= ieq;
+                    }
+                    if let (Some(s), Some(d)) = (source, drain) {
+                        matrix[(s, d)] -= gds;
+                    }
+                    if let (Some(s), Some(g)) = (source, gate) {
+                        matrix[(s, g)] -= gm;
+                    }
+                }
+                crate::device::MosfetType::Pmos => {
+                    // PMOS: Current flows Source -> Drain
+                    if let Some(s) = source {
+                        matrix[(s, s)] += gds + gm;
+                        rhs[s] += ieq;
+                    }
+                    if let (Some(s), Some(d)) = (source, drain) {
+                        matrix[(s, d)] -= gds;
+                    }
+                    if let (Some(s), Some(g)) = (source, gate) {
+                        matrix[(s, g)] -= gm;
+                    }
+
+                    if let Some(d) = drain {
+                        matrix[(d, d)] += gds;
+                        rhs[d] -= ieq;
+                    }
+                    if let (Some(d), Some(s)) = (drain, source) {
+                        matrix[(d, s)] -= gds + gm;
+                    }
+                    if let (Some(d), Some(g)) = (drain, gate) {
+                        matrix[(d, g)] += gm;
+                    }
+                }
+            }
+        }
+
         Ok(Self {
             dim,
             num_nodes,
@@ -170,6 +271,66 @@ impl MnaSystem {
         }
 
         Ok(state)
+    }
+
+    /// Solves the circuit state, automatically using Newton-Raphson if nonlinear components are present.
+    pub fn solve_circuit(
+        circuit: &Circuit,
+        transient_info: Option<(f64, &CircuitState)>,
+        initial_guess: Option<&CircuitState>,
+    ) -> Result<CircuitState, CircuitError> {
+        if !circuit.is_nonlinear() {
+            let mna = Self::build(circuit, transient_info, None)?;
+            return mna.solve(circuit);
+        }
+
+        // Nonlinear solve using Newton-Raphson
+        let mut guess = initial_guess.cloned().unwrap_or_else(CircuitState::new);
+        let max_iter = 150;
+        let reltol = 1e-4;
+        let abstol = 1e-9;
+
+        for _iter in 1..=max_iter {
+            let mna = Self::build(circuit, transient_info, Some(&guess))?;
+            let next_state = mna.solve(circuit)?;
+
+            // Check convergence on node voltages
+            let mut converged = true;
+            for node in circuit.non_ground_nodes() {
+                let v_old = guess.voltage(node);
+                let v_new = next_state.voltage(node);
+                let diff = (v_new - v_old).abs();
+                let tol = reltol * v_old.abs().max(v_new.abs()) + abstol;
+                if diff > tol {
+                    converged = false;
+                    break;
+                }
+            }
+
+            if converged {
+                return Ok(next_state);
+            }
+
+            // Damped update: limit rapid voltage jumps per iteration to improve stability
+            let mut damped_state = CircuitState::new();
+            for node in circuit.non_ground_nodes() {
+                let v_old = guess.voltage(node);
+                let v_new = next_state.voltage(node);
+                let delta = (v_new - v_old).clamp(-2.0, 2.0);
+                damped_state.set_voltage(node, v_old + delta);
+            }
+            for vsrc in &circuit.voltage_sources {
+                if let Some(i) = next_state.current(&vsrc.name) {
+                    damped_state.set_branch_current(&vsrc.name, i);
+                }
+            }
+            guess = damped_state;
+        }
+
+        Err(CircuitError::Numerical(NumericalError::NoConvergence {
+            iterations: max_iter,
+            reason: "Newton-Raphson failed to converge for nonlinear circuit".to_string(),
+        }))
     }
 
     pub fn dimension(&self) -> usize {
