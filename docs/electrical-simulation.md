@@ -199,6 +199,28 @@ Pengujian integrasi otomatis berada di direktori `models/electrical/tests/`:
    - **HOLD Phase 2** ($S=0\text{V}, R=0\text{V}$): Input dilepas, state $Q$ tetap bertahan $< 0.5\text{V}$.
    - **Kesimpulan**: Memori 1-bit berhasil tercipta murni dari dinamika medan listrik transistor fisik tanpa percabangan logika software (`if/else`).
 
+### G. Nested Subcircuits (`tests/subcircuit_nesting.rs`)
+1. **Rekursi Template**: `Subcircuit` kini dapat berisi `SubcircuitInstance` lain. Setiap instance mendapat prefix nama sendiri, sehingga node internal tidak bertabrakan.
+2. **Ekuivalensi**: AND yang dibangun dari NAND + inverter bertingkat menghasilkan tegangan yang identik dengan versi flat pada keempat kombinasi input.
+3. **Isolasi Instance**: Dua instance template yang sama memiliki node internal terpisah (`U1_NAND1_n_mid` vs `U2_NAND1_n_mid`).
+4. **Validasi Binding**: Port child yang tidak dikenal, port yang tidak di-bind, dan nama instance duplikat ditolak dengan `CircuitError`.
+
+### H. Unit Kombinasional Digital (`tests/digital_combinational.rs`)
+1. **CMOS XOR**: Empat gerbang NAND; tabel kebenaran $00 \to 0, 01 \to 1, 10 \to 1, 11 \to 0$.
+2. **CMOS Half Adder**: XOR untuk `SUM`, AND untuk `CARRY`; 4 kombinasi terverifikasi.
+3. **CMOS Full Adder**: Dua half adder + OR; seluruh 8 kombinasi $(A, B, C_{in})$ terverifikasi untuk `SUM` dan `COUT`.
+
+### I. Unit Sekuensial Digital (`tests/digital_sequential.rs`)
+1. **D Latch**: NAND-based gated latch.
+   - `EN=1` transparan: `Q` mengikuti `D`.
+   - `EN=0` menyimpan: perubahan `D` tidak mengubah `Q`.
+2. **D Flip-Flop Master–Slave**:
+   - Master transparan saat `CLK=0`, slave transparan saat `CLK=1`.
+   - `Q` hanya berubah pada **rising edge**.
+   - Perilaku hold terverifikasi saat `D` berubah di luar edge dan pada falling edge.
+   - `Q_BAR` selalu komplemen `Q`.
+3. **Parameter Simulasi**: $\Delta t = 0.1\text{ ns}$, durasi 5 ns per fase, kapasitansi simpan $1\text{ pF}$.
+
 Jalankan seluruh pengujian dengan perintah:
 ```bash
 cargo test -p tw-electrical
@@ -208,8 +230,8 @@ cargo test -p tw-electrical
 
 ## 6. Roadmap Lanjutan (Next Steps)
 
-1. **Complex Digital Units (Half Adder, Full Adder, D-Flip-Flop)**:
-   - Menyusun unit aritmatika dan register dari gerbang CMOS `Subcircuit`.
+1. **Larger Digital Units (Register, ALU Slice)**:
+   - Menyusun register dari beberapa `cmos_dff`, lalu unit aritmatika dari full adder.
 2. **Adaptive Timestep & LTE Control (Phase 6 / N4)**:
    - Memilih $\Delta t$ secara dinamis berdasarkan laju perubahan tegangan (*Local Truncation Error*).
 3. **Sparse Matrix Formulation (Phase 6 / N2)**:

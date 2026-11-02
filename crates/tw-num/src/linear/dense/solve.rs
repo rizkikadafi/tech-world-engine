@@ -30,15 +30,15 @@ pub fn solve_with_lu(lu_f: &LuFactorization, b: &Vector) -> Result<Vector, Numer
     }
     // Apply permutation
     let mut x = vec![0.0f64; n];
-    for i in 0..n {
-        x[i] = b.as_slice()[lu_f.pivot[i]];
+    for (xi, &pivot) in x.iter_mut().zip(lu_f.pivot.iter()) {
+        *xi = b.as_slice()[pivot];
     }
     // Forward substitution: L*y = x (L has unit diagonal)
     let mut y = x.clone();
     for i in 0..n {
         let mut s = y[i];
-        for j in 0..i {
-            s -= lu_f.lu[i * n + j] * y[j];
+        for (j, &yj) in y.iter().enumerate().take(i) {
+            s -= lu_f.lu[i * n + j] * yj;
         }
         y[i] = s;
     }
@@ -49,8 +49,8 @@ pub fn solve_with_lu(lu_f: &LuFactorization, b: &Vector) -> Result<Vector, Numer
         while i >= 0 {
             let idx = i as usize;
             let mut s = sol[idx];
-            for j in (idx + 1)..n {
-                s -= lu_f.lu[idx * n + j] * sol[j];
+            for (j, &sol_j) in sol.iter().enumerate().skip(idx + 1) {
+                s -= lu_f.lu[idx * n + j] * sol_j;
             }
             let udiag = lu_f.lu[idx * n + idx];
             if udiag.abs() < 1e-18 {

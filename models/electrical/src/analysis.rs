@@ -86,7 +86,7 @@ pub fn transient(
         )));
     }
 
-    let mut current_state = initial_state.unwrap_or_else(CircuitState::new);
+    let mut current_state = initial_state.unwrap_or_default();
     let mut result = TransientResult::new();
 
     // Record t=0

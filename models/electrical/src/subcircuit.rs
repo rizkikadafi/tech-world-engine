@@ -1,11 +1,17 @@
 //! Subcircuit abstraction for modular, hierarchical circuit composition.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::circuit::Circuit;
 use crate::device::MosfetType;
 use crate::error::CircuitError;
 use crate::node::NodeId;
+
+/// Maximum nesting depth allowed for recursive subcircuit instantiation.
+///
+/// This is a guard against pathological templates; real designs rarely exceed
+/// a handful of levels.
+pub const MAX_SUBCIRCUIT_DEPTH: usize = 64;
 
 /// Device template stored in a subcircuit definition before instantiation.
 #[derive(Debug, Clone, PartialEq)]
@@ -54,22 +60,149 @@ pub enum DeviceTemplate {
     },
 }
 
+/// A nested subcircuit instance stored in a parent template.
+///
+/// `bindings` maps the child's port names to node names in the parent's local
+/// namespace. Those parent nodes may be parent ports, parent device terminals,
+/// or dedicated internal nodes created by the parent.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SubcircuitInstance {
+    pub instance_name: String,
+    pub template: Box<Subcircuit>,
+    pub bindings: Vec<(String, String)>,
+}
+
 /// Reusable subcircuit template with defined external interface ports.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Subcircuit {
     pub name: String,
     pub ports: Vec<String>,
     pub devices: Vec<DeviceTemplate>,
+    pub subcircuits: Vec<SubcircuitInstance>,
 }
 
 impl Subcircuit {
     /// Creates a new empty subcircuit template with declared external port names.
-    pub fn new(name: impl Into<String>, ports: impl IntoIterator<Item = impl Into<String>>) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        ports: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
         Self {
             name: name.into(),
             ports: ports.into_iter().map(Into::into).collect(),
             devices: Vec::new(),
+            subcircuits: Vec::new(),
         }
+    }
+
+    /// Adds a nested subcircuit instance to this template.
+    ///
+    /// `bindings` maps the child's ports to local node names in this template.
+    /// For example, composing a NAND and an inverter into an AND gate:
+    ///
+    /// ```ignore
+    /// sub.add_subcircuit(
+    ///     "NAND1",
+    ///     cmos_nand(config),
+    ///     &[
+    ///         ("A", "A"),
+    ///         ("B", "B"),
+    ///         ("OUT", "nand_out"),
+    ///         ("VDD", "VDD"),
+    ///         ("GND", "GND"),
+    ///     ],
+    /// );
+    /// ```
+    pub fn add_subcircuit(
+        &mut self,
+        instance_name: impl Into<String>,
+        template: Subcircuit,
+        bindings: &[(&str, &str)],
+    ) -> &mut Self {
+        self.subcircuits.push(SubcircuitInstance {
+            instance_name: instance_name.into(),
+            template: Box::new(template),
+            bindings: bindings
+                .iter()
+                .map(|(port, node)| (port.to_string(), node.to_string()))
+                .collect(),
+        });
+        self
+    }
+
+    /// Validates this template and all nested subcircuits.
+    ///
+    /// Checks for duplicate port names, duplicate/empty instance names,
+    /// unknown or duplicate child-port bindings, and missing child-port
+    /// bindings. It does not require parent-side node names to exist yet;
+    /// unknown parent names are created as internal nodes during instantiation.
+    pub fn validate(&self) -> Result<(), CircuitError> {
+        self.validate_depth(0)
+    }
+
+    fn validate_depth(&self, depth: usize) -> Result<(), CircuitError> {
+        if depth > MAX_SUBCIRCUIT_DEPTH {
+            return Err(CircuitError::InvalidElement(format!(
+                "Subcircuit '{}' exceeds maximum nesting depth of {}",
+                self.name, MAX_SUBCIRCUIT_DEPTH
+            )));
+        }
+
+        let mut port_names = HashSet::new();
+        for port in &self.ports {
+            if !port_names.insert(port.as_str()) {
+                return Err(CircuitError::InvalidElement(format!(
+                    "Subcircuit '{}': duplicate port '{}'",
+                    self.name, port
+                )));
+            }
+        }
+
+        let mut instance_names = HashSet::new();
+        for instance in &self.subcircuits {
+            if instance.instance_name.is_empty() {
+                return Err(CircuitError::InvalidElement(format!(
+                    "Subcircuit '{}': subcircuit instance name cannot be empty",
+                    self.name
+                )));
+            }
+            if !instance_names.insert(instance.instance_name.as_str()) {
+                return Err(CircuitError::InvalidElement(format!(
+                    "Subcircuit '{}': duplicate subcircuit instance '{}'",
+                    self.name, instance.instance_name
+                )));
+            }
+
+            let child = &instance.template;
+            let mut bound_ports = HashSet::new();
+            for (child_port, _parent_node) in &instance.bindings {
+                if !child.ports.iter().any(|port| port == child_port) {
+                    return Err(CircuitError::InvalidElement(format!(
+                        "Subcircuit '{}' instance '{}': child '{}' has no port '{}'",
+                        self.name, instance.instance_name, child.name, child_port
+                    )));
+                }
+                if !bound_ports.insert(child_port.as_str()) {
+                    return Err(CircuitError::InvalidElement(format!(
+                        "Subcircuit '{}' instance '{}': duplicate binding for child port '{}'",
+                        self.name, instance.instance_name, child_port
+                    )));
+                }
+            }
+
+            for child_port in &child.ports {
+                if !bound_ports.contains(child_port.as_str()) {
+                    return Err(CircuitError::InvalidElement(format!(
+                        "Subcircuit '{}' instance '{}': child '{}' port '{}' is not bound",
+                        self.name, instance.instance_name, child.name, child_port
+                    )));
+                }
+            }
+
+            child.validate_depth(depth + 1)?;
+        }
+
+        Ok(())
     }
 
     /// Adds a resistor to the subcircuit template.
@@ -174,19 +307,57 @@ impl Subcircuit {
     ///
     /// - `instance_name`: Prefix for devices and internal nodes to prevent collision.
     /// - `port_bindings`: Mapping from template port names to caller's `NodeId`.
+    ///
+    /// Nested subcircuits are instantiated recursively, with their internal
+    /// nodes and device names prefixed by `instance_name` plus the child
+    /// instance name.
     pub fn instantiate(
         &self,
         circuit: &mut Circuit,
         instance_name: &str,
         port_bindings: &[(&str, NodeId)],
     ) -> Result<(), CircuitError> {
-        let binding_map: HashMap<&str, NodeId> = port_bindings.iter().copied().collect();
+        self.validate()?;
+        self.instantiate_depth(circuit, instance_name, port_bindings, 0)
+    }
 
-        // Verify all declared ports are bound
+    fn instantiate_depth(
+        &self,
+        circuit: &mut Circuit,
+        instance_name: &str,
+        port_bindings: &[(&str, NodeId)],
+        depth: usize,
+    ) -> Result<(), CircuitError> {
+        if depth > MAX_SUBCIRCUIT_DEPTH {
+            return Err(CircuitError::InvalidElement(format!(
+                "Subcircuit '{}' exceeds maximum nesting depth of {}",
+                self.name, MAX_SUBCIRCUIT_DEPTH
+            )));
+        }
+
+        let mut binding_map: HashMap<&str, NodeId> = HashMap::new();
+        for &(port, node) in port_bindings {
+            if binding_map.insert(port, node).is_some() {
+                return Err(CircuitError::InvalidElement(format!(
+                    "Subcircuit '{}' instance '{}': duplicate binding for port '{}'",
+                    self.name, instance_name, port
+                )));
+            }
+        }
+
+        // Verify all declared ports are bound, and reject unknown bindings.
         for port in &self.ports {
             if !binding_map.contains_key(port.as_str()) {
                 return Err(CircuitError::InvalidElement(format!(
                     "Subcircuit '{}' instance '{}': port '{}' is not bound",
+                    self.name, instance_name, port
+                )));
+            }
+        }
+        for port in binding_map.keys() {
+            if !self.ports.iter().any(|declared| declared == port) {
+                return Err(CircuitError::InvalidElement(format!(
+                    "Subcircuit '{}' instance '{}': unknown port '{}'",
                     self.name, instance_name, port
                 )));
             }
@@ -201,7 +372,7 @@ impl Subcircuit {
         node_map.insert("GND".to_string(), NodeId::GROUND);
         node_map.insert("gnd".to_string(), NodeId::GROUND);
 
-        // Pre-discover all internal nodes and register them in circuit
+        // Pre-discover all internal nodes and register them in circuit.
         for dev in &self.devices {
             let names: &[&str] = match dev {
                 DeviceTemplate::Resistor { pos, neg, .. } => &[pos, neg],
@@ -209,13 +380,30 @@ impl Subcircuit {
                 DeviceTemplate::VoltageSource { pos, neg, .. } => &[pos, neg],
                 DeviceTemplate::CurrentSource { pos, neg, .. } => &[pos, neg],
                 DeviceTemplate::Diode { pos, neg, .. } => &[pos, neg],
-                DeviceTemplate::Mosfet { drain, gate, source, .. } => &[drain, gate, source],
+                DeviceTemplate::Mosfet {
+                    drain,
+                    gate,
+                    source,
+                    ..
+                } => &[drain, gate, source],
             };
             for &name in names {
                 if !node_map.contains_key(name) {
                     let full_internal_name = format!("{}_{}", instance_name, name);
                     let id = circuit.get_or_add_node(&full_internal_name);
                     node_map.insert(name.to_string(), id);
+                }
+            }
+        }
+
+        // Parent-side nodes used by nested subcircuit bindings are internal
+        // nodes of this template unless they are already ports/devices.
+        for instance in &self.subcircuits {
+            for (_child_port, parent_node) in &instance.bindings {
+                if !node_map.contains_key(parent_node) {
+                    let full_internal_name = format!("{}_{}", instance_name, parent_node);
+                    let id = circuit.get_or_add_node(&full_internal_name);
+                    node_map.insert(parent_node.clone(), id);
                 }
             }
         }
@@ -278,9 +466,8 @@ impl Subcircuit {
                     let p = *node_map.get(pos).unwrap();
                     let n = *node_map.get(neg).unwrap();
                     let full_name = format!("{}_{}", instance_name, name);
-                    let d = crate::device::Diode::with_params(
-                        full_name, p, n, *is_sat, *vt, *emission,
-                    );
+                    let d =
+                        crate::device::Diode::with_params(full_name, p, n, *is_sat, *vt, *emission);
                     circuit.diodes.push(d);
                 }
                 DeviceTemplate::Mosfet {
@@ -309,6 +496,24 @@ impl Subcircuit {
                     circuit.mosfets.push(m);
                 }
             }
+        }
+
+        // Instantiate nested subcircuits recursively.
+        for instance in &self.subcircuits {
+            let child_instance_name = format!("{}_{}", instance_name, instance.instance_name);
+            let child_bindings: Vec<(&str, NodeId)> = instance
+                .bindings
+                .iter()
+                .map(|(child_port, parent_node)| {
+                    (child_port.as_str(), *node_map.get(parent_node).unwrap())
+                })
+                .collect();
+            instance.template.instantiate_depth(
+                circuit,
+                &child_instance_name,
+                &child_bindings,
+                depth + 1,
+            )?;
         }
 
         Ok(())

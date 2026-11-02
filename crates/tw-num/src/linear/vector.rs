@@ -95,8 +95,8 @@ impl Add for Vector {
             return Err(NumericalError::DimensionMismatch);
         }
         let mut out = vec![0.0f64; self.len()];
-        for i in 0..self.len() {
-            out[i] = self.data[i] + other.data[i];
+        for (o, (&a, &b)) in out.iter_mut().zip(self.data.iter().zip(other.data.iter())) {
+            *o = a + b;
         }
         Ok(Vector { data: out })
     }
@@ -122,8 +122,8 @@ impl Sub for Vector {
             return Err(NumericalError::DimensionMismatch);
         }
         let mut out = vec![0.0f64; self.len()];
-        for i in 0..self.len() {
-            out[i] = self.data[i] - other.data[i];
+        for (o, (&a, &b)) in out.iter_mut().zip(self.data.iter().zip(other.data.iter())) {
+            *o = a - b;
         }
         Ok(Vector { data: out })
     }
@@ -156,4 +156,3 @@ impl std::ops::IndexMut<usize> for Vector {
         &mut self.data[index]
     }
 }
-

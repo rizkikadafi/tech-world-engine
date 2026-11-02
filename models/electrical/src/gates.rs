@@ -4,6 +4,7 @@
 //! - CMOS Inverter (NOT)
 //! - CMOS NAND (2-input)
 //! - CMOS NOR (2-input)
+//! - CMOS XOR (2-input)
 //! - CMOS AND (2-input, compound NAND + NOT)
 //! - CMOS OR (2-input, compound NOR + NOT)
 
@@ -21,6 +22,11 @@ pub struct CmosGateConfig {
     pub beta_n: f64,
     /// PMOS transconductance parameter beta (A/V^2)
     pub beta_p: f64,
+    /// Parasitic/load capacitance added to storage nodes in sequential logic (F).
+    ///
+    /// Combinational gates ignore this field; D latches and flip-flops use it
+    /// to give their internal nodes a defined amount of charge storage.
+    pub load_capacitance: f64,
 }
 
 impl Default for CmosGateConfig {
@@ -29,7 +35,16 @@ impl Default for CmosGateConfig {
             vth: 0.8,
             beta_n: 1e-3,
             beta_p: 1e-3,
+            load_capacitance: 1e-12,
         }
+    }
+}
+
+impl CmosGateConfig {
+    /// Returns a copy of this configuration with a different load capacitance.
+    pub fn with_load_capacitance(mut self, load_capacitance: f64) -> Self {
+        self.load_capacitance = load_capacitance;
+        self
     }
 }
 
@@ -94,14 +109,29 @@ pub fn cmos_and(config: CmosGateConfig) -> Subcircuit {
     let mut sub = Subcircuit::new("cmos_and", ["A", "B", "OUT", "VDD", "GND"]);
 
     // NAND stage: drives internal node "nand_out"
-    sub.add_pmos("Mp_a", "nand_out", "A", "VDD", config.vth, config.beta_p);
-    sub.add_pmos("Mp_b", "nand_out", "B", "VDD", config.vth, config.beta_p);
-    sub.add_nmos("Mn_a", "nand_out", "A", "n_mid", config.vth, config.beta_n * 2.0);
-    sub.add_nmos("Mn_b", "n_mid", "B", "GND", config.vth, config.beta_n * 2.0);
+    sub.add_subcircuit(
+        "NAND1",
+        cmos_nand(config),
+        &[
+            ("A", "A"),
+            ("B", "B"),
+            ("OUT", "nand_out"),
+            ("VDD", "VDD"),
+            ("GND", "GND"),
+        ],
+    );
 
     // Inverter stage: inverts "nand_out" to "OUT"
-    sub.add_pmos("Mp_inv", "OUT", "nand_out", "VDD", config.vth, config.beta_p);
-    sub.add_nmos("Mn_inv", "OUT", "nand_out", "GND", config.vth, config.beta_n);
+    sub.add_subcircuit(
+        "INV1",
+        cmos_inverter(config),
+        &[
+            ("IN", "nand_out"),
+            ("OUT", "OUT"),
+            ("VDD", "VDD"),
+            ("GND", "GND"),
+        ],
+    );
 
     sub
 }
@@ -113,14 +143,91 @@ pub fn cmos_or(config: CmosGateConfig) -> Subcircuit {
     let mut sub = Subcircuit::new("cmos_or", ["A", "B", "OUT", "VDD", "GND"]);
 
     // NOR stage: drives internal node "nor_out"
-    sub.add_pmos("Mp_a", "p_mid", "A", "VDD", config.vth, config.beta_p * 2.0);
-    sub.add_pmos("Mp_b", "nor_out", "B", "p_mid", config.vth, config.beta_p * 2.0);
-    sub.add_nmos("Mn_a", "nor_out", "A", "GND", config.vth, config.beta_n);
-    sub.add_nmos("Mn_b", "nor_out", "B", "GND", config.vth, config.beta_n);
+    sub.add_subcircuit(
+        "NOR1",
+        cmos_nor(config),
+        &[
+            ("A", "A"),
+            ("B", "B"),
+            ("OUT", "nor_out"),
+            ("VDD", "VDD"),
+            ("GND", "GND"),
+        ],
+    );
 
     // Inverter stage: inverts "nor_out" to "OUT"
-    sub.add_pmos("Mp_inv", "OUT", "nor_out", "VDD", config.vth, config.beta_p);
-    sub.add_nmos("Mn_inv", "OUT", "nor_out", "GND", config.vth, config.beta_n);
+    sub.add_subcircuit(
+        "INV1",
+        cmos_inverter(config),
+        &[
+            ("IN", "nor_out"),
+            ("OUT", "OUT"),
+            ("VDD", "VDD"),
+            ("GND", "GND"),
+        ],
+    );
+
+    sub
+}
+
+/// Creates a 2-input CMOS XOR subcircuit from four NAND gates.
+///
+/// Ports: `["A", "B", "OUT", "VDD", "GND"]`
+///
+/// Topology:
+/// ```text
+/// n1  = NAND(A, B)
+/// n2  = NAND(A, n1)
+/// n3  = NAND(B, n1)
+/// OUT = NAND(n2, n3)
+/// ```
+pub fn cmos_xor(config: CmosGateConfig) -> Subcircuit {
+    let mut sub = Subcircuit::new("cmos_xor", ["A", "B", "OUT", "VDD", "GND"]);
+
+    sub.add_subcircuit(
+        "NAND_AB",
+        cmos_nand(config),
+        &[
+            ("A", "A"),
+            ("B", "B"),
+            ("OUT", "n1"),
+            ("VDD", "VDD"),
+            ("GND", "GND"),
+        ],
+    );
+    sub.add_subcircuit(
+        "NAND_A",
+        cmos_nand(config),
+        &[
+            ("A", "A"),
+            ("B", "n1"),
+            ("OUT", "n2"),
+            ("VDD", "VDD"),
+            ("GND", "GND"),
+        ],
+    );
+    sub.add_subcircuit(
+        "NAND_B",
+        cmos_nand(config),
+        &[
+            ("A", "B"),
+            ("B", "n1"),
+            ("OUT", "n3"),
+            ("VDD", "VDD"),
+            ("GND", "GND"),
+        ],
+    );
+    sub.add_subcircuit(
+        "NAND_OUT",
+        cmos_nand(config),
+        &[
+            ("A", "n2"),
+            ("B", "n3"),
+            ("OUT", "OUT"),
+            ("VDD", "VDD"),
+            ("GND", "GND"),
+        ],
+    );
 
     sub
 }
@@ -139,7 +246,12 @@ impl Circuit {
         sub.instantiate(
             self,
             instance_name,
-            &[("IN", in_node), ("OUT", out_node), ("VDD", vdd), ("GND", gnd)],
+            &[
+                ("IN", in_node),
+                ("OUT", out_node),
+                ("VDD", vdd),
+                ("GND", gnd),
+            ],
         )
     }
 
@@ -157,7 +269,13 @@ impl Circuit {
         sub.instantiate(
             self,
             instance_name,
-            &[("A", a), ("B", b), ("OUT", out_node), ("VDD", vdd), ("GND", gnd)],
+            &[
+                ("A", a),
+                ("B", b),
+                ("OUT", out_node),
+                ("VDD", vdd),
+                ("GND", gnd),
+            ],
         )
     }
 
@@ -175,7 +293,13 @@ impl Circuit {
         sub.instantiate(
             self,
             instance_name,
-            &[("A", a), ("B", b), ("OUT", out_node), ("VDD", vdd), ("GND", gnd)],
+            &[
+                ("A", a),
+                ("B", b),
+                ("OUT", out_node),
+                ("VDD", vdd),
+                ("GND", gnd),
+            ],
         )
     }
 
@@ -193,7 +317,13 @@ impl Circuit {
         sub.instantiate(
             self,
             instance_name,
-            &[("A", a), ("B", b), ("OUT", out_node), ("VDD", vdd), ("GND", gnd)],
+            &[
+                ("A", a),
+                ("B", b),
+                ("OUT", out_node),
+                ("VDD", vdd),
+                ("GND", gnd),
+            ],
         )
     }
 
@@ -211,7 +341,37 @@ impl Circuit {
         sub.instantiate(
             self,
             instance_name,
-            &[("A", a), ("B", b), ("OUT", out_node), ("VDD", vdd), ("GND", gnd)],
+            &[
+                ("A", a),
+                ("B", b),
+                ("OUT", out_node),
+                ("VDD", vdd),
+                ("GND", gnd),
+            ],
+        )
+    }
+
+    /// Adds a 2-input CMOS XOR gate connected to the given nodes.
+    pub fn add_cmos_xor(
+        &mut self,
+        instance_name: &str,
+        a: NodeId,
+        b: NodeId,
+        out_node: NodeId,
+        vdd: NodeId,
+        gnd: NodeId,
+    ) -> Result<(), CircuitError> {
+        let sub = cmos_xor(CmosGateConfig::default());
+        sub.instantiate(
+            self,
+            instance_name,
+            &[
+                ("A", a),
+                ("B", b),
+                ("OUT", out_node),
+                ("VDD", vdd),
+                ("GND", gnd),
+            ],
         )
     }
 }
