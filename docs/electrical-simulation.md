@@ -228,7 +228,158 @@ cargo test -p tw-electrical
 
 ---
 
-## 6. Roadmap Lanjutan (Next Steps)
+## 6. Multi-Fidelity & Mixed-Signal Bridge (Milestone Besar #2 — Slice 1–3)
+
+Milestone ini membuktikan alur penuh untuk tiga sirkuit fisik:
+
+```text
+transistor inverter / NAND / DFF
+        │ transient + dc_op
+        ▼
+measure t_pHL, t_pLH, t_r, t_f, energy
+        │
+        ▼
+derived tw_core::Component
+        │
+        ▼
+validate: truth table / next state + timing vs physical
+```
+
+Semua kode tetap berada di `tw-electrical`; `tw-core` dan `tw-sim` tidak tahu apa itu transistor, MOSFET, inverter, atau flip-flop.
+
+### A. Time base eksplisit
+
+`tw-core` memodelkan waktu sebagai `u64` tick tanpa satuan fisik. Modul `time_base.rs` menambahkan:
+
+```rust
+pub struct TimeBase {
+    pub seconds_per_tick: f64, // default 1 ns
+}
+```
+
+`TimeBase::delay_ticks(seconds)` membulatkan ke atas dan selalu menghasilkan minimal **1 tick**, sehingga komponen turunan tidak pernah menghasilkan transisi zero-delay yang melanggar kausalitas.
+
+### B. Automated characterizer (`characterization.rs`)
+
+`Characterizer` menyediakan tiga entry point:
+
+- `inverter()` — CMOS inverter satu input.
+- `nand2()` — NAND 2-input; edge turun diukur dengan `A=1` dan `B` naik, edge naik dengan `A=1` dan `B` turun.
+- `dff()` — master-slave D flip-flop positive-edge-triggered.
+
+Langkah umum untuk gerbang kombinasional:
+
+1. Menjalankan `dc_op` untuk semua kombinasi input → tabel kebenaran serta level logika terukur (`LogicLevels`).
+2. Menjalankan `transient` untuk satu edge turun dan satu edge naik.
+3. Mencari crossing 10%, 50%, dan 90% dengan interpolasi linear antar sampel.
+4. Mengintegrasikan energi supply dengan aturan trapesium:
+
+```text
+E = ∫ V_supply · (−I_supply) dt
+```
+
+Konvensi tanda mengikuti MNA: arus source bernilai negatif saat source mengalirkan daya.
+
+DFF tidak punya tabel kebenaran kombinasional. Yang diukur adalah:
+
+1. Inisialisasi slave latch dengan clock pulse saat `D=0`.
+2. `D=1`, `CLK=0`, settle → master menangkap 1.
+3. Edge naik `CLK` → ukur `t_pLH`, `t_r`, dan energi edge naik.
+4. `D=0`, `CLK=0`, settle → master menangkap 0.
+5. Edge naik `CLK` → ukur `t_pHL`, `t_f`, dan energi edge turun.
+
+`settle_duration` (default 10 ns) memberi latch internal waktu untuk menetap sebelum edge clock diukur. Tabel kebenaran yang dikembalikan adalah **next-state table**: `Q` setelah edge naik sama dengan `D`, sehingga kolom `CLK` bersifat *don't-care*.
+
+Hasil default (Vdd 5 V, CL 10 pF, Δt 0.05 ns, durasi 20 ns, β = 1e-3, Vth = 0.8 V):
+
+| Metrik | Inverter | NAND 2-input | DFF (CLK→Q) |
+| --- | ---: | ---: | ---: |
+| `t_pHL` | ≈ 2.75 ns | ≈ 2.85 ns | ≈ 3.51 ns |
+| `t_pLH` | ≈ 2.75 ns | ≈ 2.75 ns | ≈ 3.03 ns |
+| `t_r` | ≈ 6.68 ns | ≈ 6.68 ns | ≈ 5.33 ns |
+| `t_f` | ≈ 6.68 ns | ≈ 6.81 ns | ≈ 7.47 ns |
+| `energy_rise` | ≈ 249.9 pJ | ≈ 249.9 pJ | ≈ 286.1 pJ |
+| `energy_fall` | ≈ 0 pJ | ≈ 0 pJ | ≈ 25.1 pJ |
+| `energy_per_cycle` | ≈ 249.9 pJ | ≈ 249.9 pJ | ≈ 311.2 pJ |
+
+Angka energi rise inverter/NAND mendekati $C_L V_{dd}^2 = 10\text{ pF} \times 25\text{ V}^2 = 250\text{ pJ}$, yang menjadi sanity check fisik. DFF lebih tinggi karena ikut mengisi node internal latch dan clock inverter.
+
+### C. Derived component (`derived.rs`)
+
+Ada dua komponen turunan, keduanya mengubah hasil ukur menjadi `tw_core::Component`:
+
+- `DerivedGate` — inverter dan NAND 2-input.
+- `DerivedDff` — D flip-flop positive-edge-triggered.
+
+Aturan bersama:
+
+- **Logika berasal dari pengukuran fisik**, bukan `match` fungsi gerbang. Untuk gerbang kombinasional tabel kebenaran diambil dari `dc_op`; untuk DFF tabel next-state diambil dari edge clock yang benar-benar disimulasikan (`Q = D` setelah edge naik).
+- Delay naik memakai `t_pLH`, delay turun memakai `t_pHL`, masing-masing dikuantisasi ke tick.
+- Event output memakai `EventPayload::Custom` internal + **generation counter** (inertial delay), sehingga edge yang sudah basi dibatalkan bila input berubah lebih cepat dari delay.
+- `State` mengekspos `output`, `pending`, `delay_ticks`, `t_pHL_ticks`, `t_pLH_ticks`, serta metrik detik/energi hasil pengukuran.
+
+`DerivedDff` menambahkan semantik edge-triggered:
+
+- `D` hanya disampling pada transisi `CLK` rendah → tinggi.
+- Perubahan `D` saat `CLK` tinggi atau rendah tidak langsung mengubah `Q`.
+- Bila edge clock baru menghasilkan nilai yang sama dengan `Q` yang sudah commit, edge pending dibatalkan.
+- Port: `D` (1), `CLK` (2), `Q` (3).
+
+### D. Mixed-signal bridge (`bridge.rs`)
+
+`CircuitComponent` adalah adapter `tw_core::Component`:
+
+- `BridgeInput` memetakan `PortSignal` diskrit ke voltage source di dalam `Circuit`.
+- `BridgeOutput` memetakan node analog ke `PortSignal` diskrit melalui threshold.
+- Setiap `sync_interval_ticks`, bridge menjalankan `transient` sepanjang interval tersebut, menyimpan `CircuitState` terakhir, dan hanya mengeluarkan event bila logika output berubah.
+- Saat input berubah, bridge lebih dulu mengintegrasikan waktu yang sudah berlalu dengan nilai input lama, lalu menerapkan nilai baru. Tidak ada waktu fisik yang hilang atau dihitung dua kali.
+- Energi supply diakumulasi di `State` (`energy_joules`).
+- Kegagalan solver tidak membuat panic: error dicatat di `last_error`, output terakhir dipertahankan.
+- Bila `dc_op` awal gagal karena sirkuit bistabil (misalnya master-slave DFF dengan latch cross-coupled), bridge menjalankan startup transient 10 ns dari state nol untuk menetapkan state analog awal secara deterministik.
+- `BridgeConfig` memvalidasi bahwa semua `source_name` input dan `supply_source` benar-benar ada di `Circuit`, sehingga salah ketik gagal saat konstruksi, bukan saat simulasi.
+
+Contoh menjalankan inverter, NAND 2-input, dan DFF sekaligus:
+
+```bash
+cargo run -p tw-electrical --example multi_fidelity
+```
+
+Output yang diharapkan (1 ns/tick):
+
+```text
+=== inverter: same discrete input applied (0 → 1) ===
+bridge  output transitions: [(0, true), (3, false)]
+derived output transitions: [(0, true), (3, false)]
+
+=== NAND2: A high, B pulses high then low ===
+bridge  output transitions: [(0, true), (8, false), (18, true)]
+derived output transitions: [(0, true), (8, false), (18, true)]
+
+=== DFF: capture 1, then capture 0 on rising edges ===
+bridge  output transitions: [(0, false), (22, true), (47, false)]
+derived output transitions: [(0, false), (22, true), (47, false)]
+```
+
+### E. Batas implementasi saat ini
+
+- Inverter, NAND 2-input, dan DFF sudah end-to-end. Gerbang lain (NOR, XOR, AND, OR) belum punya entry point characterizer/derived.
+- Stimulus berupa step ideal; slope input berhingga belum dimodelkan.
+- Setup/hold DFF belum divalidasi eksplisit; karakterizer memakai window settle yang cukup lebar, bukan batas timing formal.
+- Resolusi timing bridge dibatasi `sync_interval_ticks`; glitch yang lebih pendek dari satu interval tidak terlihat.
+- `solver_dt` harus lebih kecil dari durasi satu interval; bridge memilih `min(solver_dt, elapsed)` agar tetap valid.
+- State analog internal bridge belum ikut checkpoint/restore penuh; hanya nilai bermakna yang disimpan di `State`.
+- Bridge dengan sirkuit bistabil memakai startup transient, bukan analisis DC dengan initial condition eksplisit.
+
+### F. Test yang membuktikan alur
+
+- `tests/characterization.rs` — metrik inverter/NAND/DFF masuk akal, konvergensi saat Δt dibagi dua, truth table cocok dengan `dc_op`, dan sanity check tanda energi.
+- `tests/derived_components.rs` — delay sesuai hasil ukur, pembatalan event basi, state metrik terukur, `DerivedDff` hanya menangkap pada edge naik.
+- `tests/mixed_signal_bridge.rs` — output bridge cocok dengan transient standalone, akumulasi energi, validasi konfigurasi, perilaku NAND dan DFF.
+- `tests/multi_fidelity.rs` — `detailed → measure → abstract → validate` untuk inverter, NAND 2-input, dan DFF, termasuk perbandingan tick transisi bridge vs derived (toleransi 1 tick).
+
+---
+
+## 7. Roadmap Lanjutan (Next Steps)
 
 1. **Larger Digital Units (Register, ALU Slice)**:
    - Menyusun register dari beberapa `cmos_dff`, lalu unit aritmatika dari full adder.
@@ -236,5 +387,6 @@ cargo test -p tw-electrical
    - Memilih $\Delta t$ secara dinamis berdasarkan laju perubahan tegangan (*Local Truncation Error*).
 3. **Sparse Matrix Formulation (Phase 6 / N2)**:
    - Mengalihkan backend `tw-electrical` dari dense matrix ke sparse matrix (`CSR`/`CSC` + Markowitz LU) untuk rangkaian dengan ratusan/ribuan gerbang logika.
-4. **Phase 12: Multi-Fidelity & Mixed-Signal Bridge**:
-   - Menghubungkan solver sirkuit analog ke discrete-event core (`tw-core`/`tw-sim`).
+4. **Multi-Fidelity Lanjutan**:
+   - Slice 1–3 (inverter, NAND 2-input, DFF) sudah selesai.
+   - Selanjutnya: gerbang lain (NOR/XOR/AND/OR), input slope berhingga, setup/hold formal, dan pemilihan fidelity otomatis.

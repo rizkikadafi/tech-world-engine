@@ -162,6 +162,74 @@ let state = dc_op(&ckt).unwrap();
 assert!((state.voltage(n_out) - 5.0).abs() < 0.05);
 ```
 
+### Multi-Fidelity & Mixed-Signal Bridge
+The physical circuit can be measured automatically and turned into a discrete
+`tw_core::Component`, or wrapped directly as a mixed-signal component. The
+characterizer covers a CMOS inverter, a 2-input NAND, and a positive-edge DFF;
+`DerivedGate` and `DerivedDff` consume those measurements.
+
+```rust
+use tw_core::{ComponentId, PortId};
+use tw_electrical::prelude::*;
+
+// 1. Measure a real transistor inverter (or `.nand2()`, `.dff()`).
+let measured = Characterizer::with_defaults().inverter().unwrap();
+println!("t_pHL = {:.3} ns", measured.timing.t_pHL * 1e9);
+println!("E/cycle = {:.3} pJ", measured.timing.energy_per_cycle * 1e12);
+
+// 2. Derive a discrete component from the measurement.
+let gate = DerivedGate::from_characterization(
+    ComponentId(1),
+    "DerivedInverter",
+    &measured,
+    TimeBase::default(), // 1 ns/tick
+).unwrap();
+assert_eq!(gate.truth_table(), &measured.truth_table);
+
+// A DFF is derived the same way; it captures D on a rising CLK edge.
+let measured_dff = Characterizer::with_defaults().dff().unwrap();
+let dff = DerivedDff::from_characterization(
+    ComponentId(3),
+    "DerivedDff",
+    &measured_dff,
+    TimeBase::default(),
+).unwrap();
+
+// 3. Or expose the analog circuit as a tw_core::Component.
+//    `circuit` is a Circuit with a "Vin" source and an "out" node.
+let n_out = circuit.node_by_name("out").unwrap();
+let bridge = CircuitComponent::new(
+    ComponentId(2),
+    "BridgeInverter",
+    circuit,
+    BridgeConfig {
+        time_base: TimeBase::default(),
+        solver_dt: 5e-11,
+        sync_interval_ticks: 1,
+        supply_source: Some("Vdd".into()),
+        inputs: vec![BridgeInput::new(PortId(1), "IN", "Vin", 0.0, 5.0)],
+        outputs: vec![BridgeOutput::new(PortId(2), "OUT", n_out, 2.5)],
+    },
+).unwrap();
+```
+
+`DerivedGate` is not a hardcoded gate: its truth table comes from `dc_op` on
+the transistor circuit, and its delay is the measured propagation delay
+quantized to ticks. `DerivedDff` uses the measured clock-to-Q delay and a
+next-state table measured from real clock edges. `CircuitComponent` drives
+voltage sources from discrete `PortSignal` events, advances the transient
+solver periodically, and emits `PortSignal` events back to `tw-sim`; bistable
+circuits that fail the initial DC solve fall back to a short startup transient.
+
+Run the walkthrough (inverter, NAND 2-input, and DFF):
+
+```bash
+cargo run -p tw-electrical --example multi_fidelity
+```
+
+See `docs/electrical-simulation.md` §6 for the measurement method, energy
+convention, and current limitations.
+
 ## Testing
 ```bash
 cargo test -p tw-electrical
@@ -177,3 +245,7 @@ Test suites:
 - `tests/subcircuit_nesting.rs` — nested instantiation and binding validation.
 - `tests/digital_combinational.rs` — XOR, half adder, and full adder truth tables.
 - `tests/digital_sequential.rs` — D latch transparency/hold and DFF rising-edge capture.
+- `tests/characterization.rs` — inverter/NAND/DFF timing, energy, and measured truth tables.
+- `tests/derived_components.rs` — derived gate/DFF delay, stale-edge cancellation, state.
+- `tests/mixed_signal_bridge.rs` — analog bridge vs standalone transient, energy, NAND/DFF behavior.
+- `tests/multi_fidelity.rs` — end-to-end `detailed → measure → abstract → validate` for inverter, NAND, and DFF.

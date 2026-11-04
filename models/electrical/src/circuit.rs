@@ -126,6 +126,37 @@ impl Circuit {
         self.voltage_sources.last().unwrap()
     }
 
+    /// Looks up an independent voltage source by name.
+    pub fn voltage_source(&self, name: &str) -> Option<&VoltageSource> {
+        self.voltage_sources.iter().find(|src| src.name == name)
+    }
+
+    /// Looks up an independent voltage source by name, mutably.
+    pub fn voltage_source_mut(&mut self, name: &str) -> Option<&mut VoltageSource> {
+        self.voltage_sources.iter_mut().find(|src| src.name == name)
+    }
+
+    /// Updates the value of an existing independent voltage source.
+    ///
+    /// This is the primitive used by the characterizer and the mixed-signal
+    /// bridge to apply a logic step to an input without rebuilding the netlist.
+    pub fn set_voltage_source(
+        &mut self,
+        name: &str,
+        voltage: f64,
+    ) -> Result<(), CircuitError> {
+        match self.voltage_source_mut(name) {
+            Some(src) => {
+                src.voltage = voltage;
+                Ok(())
+            }
+            None => Err(CircuitError::InvalidElement(format!(
+                "Voltage source '{}' not found",
+                name
+            ))),
+        }
+    }
+
     /// Adds an independent current source.
     pub fn add_current_source(
         &mut self,

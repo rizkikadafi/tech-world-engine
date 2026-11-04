@@ -471,12 +471,16 @@ total    47
 
 Ini penting agar ekspektasi selaras dengan roadmap:
 
-- **Phase 6 — Numerical Foundation belum ada.** Belum ada matriks, representasi
-  sparse, maupun solver linear/nonlinear. `StateValue::Float` sudah tersedia
-  sebagai fondasi, tetapi engine belum melakukan komputasi numerik.
-- **Belum ada model domain.** `models/` masih placeholder; belum ada CPU/RAM/
-  transistor. Itu memang di luar core hingga Phase 6+.
-- **Belum ada multi-fidelity/refinement** (Phase 12–13).
+- **Phase 6 — Numerical Foundation sudah ada.** `tw-num` menyediakan matriks,
+  LU dense/sparse, dan solver nonlinear; `tw-electrical` memakainya untuk MNA.
+- **Model domain electrical sudah ada.** `models/electrical` berisi netlist,
+  MNA, transient, CMOS gates, dan digital primitives. Model domain lain
+  (CPU/RAM/network) belum ada.
+- **Multi-fidelity slice 1–3 sudah ada.** `tw-electrical` memiliki characterizer,
+  `DerivedGate`/`DerivedDff`, dan mixed-signal bridge untuk inverter, NAND 2-input,
+  dan DFF (Phase 12 slice 1–3). Lihat `docs/electrical-simulation.md` §6. Yang
+  belum: gerbang lain (NOR/XOR/AND/OR), setup/hold formal, pemilihan fidelity
+  otomatis, dan `refine()`/`select_fidelity()`.
 - **`seed` belum dipakai.** Disimpan untuk model stokastik di masa depan.
 - **`Amount::Continuous`** sudah didukung tipe, tetapi skenario yang ada masih
   memakai `Discrete`.

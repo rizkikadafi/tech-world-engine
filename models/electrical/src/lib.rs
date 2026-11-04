@@ -5,7 +5,10 @@
 //! via `tw-num`.
 
 pub mod analysis;
+pub mod bridge;
+pub mod characterization;
 pub mod circuit;
+pub mod derived;
 pub mod device;
 pub mod digital;
 pub mod error;
@@ -15,9 +18,18 @@ pub mod node;
 pub mod prelude;
 pub mod state;
 pub mod subcircuit;
+pub mod time_base;
 
-pub use analysis::{dc_op, transient, transient_adaptive, TransientResult};
+pub use analysis::{
+    dc_op, integrate_source_energy, transient, transient_adaptive, TransientResult,
+};
+pub use bridge::{BridgeConfig, BridgeInput, BridgeOutput, CircuitComponent};
+pub use characterization::{
+    CharacterizationConfig, Characterizer, GateCharacterization, GateKind, LogicLevels,
+    TimingMetrics, TruthTable,
+};
 pub use circuit::Circuit;
+pub use derived::{DerivedDff, DerivedError, DerivedGate, TimingTicks};
 pub use device::{Capacitor, CurrentSource, Diode, Mosfet, MosfetType, Resistor, VoltageSource};
 pub use digital::{cmos_d_latch, cmos_dff, cmos_full_adder, cmos_half_adder};
 pub use error::CircuitError;
@@ -26,3 +38,4 @@ pub use mna::MnaSystem;
 pub use node::NodeId;
 pub use state::CircuitState;
 pub use subcircuit::{DeviceTemplate, Subcircuit, SubcircuitInstance};
+pub use time_base::TimeBase;

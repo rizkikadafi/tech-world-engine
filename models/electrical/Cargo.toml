@@ -9,3 +9,7 @@ license.workspace = true
 tw-core = { path = "../../crates/tw-core" }
 tw-num = { path = "../../crates/tw-num" }
 thiserror = "2"
+log = "0.4"
+
+[dev-dependencies]
+tw-sim = { path = "../../crates/tw-sim" }

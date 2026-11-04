@@ -14,7 +14,7 @@ Domain concepts are modeled as *components*, *ports*, *connections*, and
 | `tw-sim` | The engine that runs it: `Simulation`, `SimulationEngine`, shared scenarios, checkpointing, and configuration. |
 | `tw-cli` | Thin command-line interface. Contains **no** simulation logic. |
 | `tw-num` | Domain-agnostic numerical foundation (Phase 6): Dense LU, matrix/vector, linear and nonlinear solve. |
-| `tw-electrical` | Domain electrical models (Phase 7–11): Circuit netlist, automated MNA stamping, DC OP/transient solvers, CMOS gates, and digital primitives (adders, D latch, DFF). |
+| `tw-electrical` | Domain electrical models (Phase 7–12): Circuit netlist, automated MNA stamping, DC OP/transient solvers, CMOS gates, digital primitives (adders, D latch, DFF), automated characterizer, derived discrete components, and a mixed-signal `CircuitComponent` bridge. |
 
 The dependency direction is one-way:
 
@@ -35,6 +35,11 @@ cargo run -p tw-cli -- run counter
 cargo run -p tw-cli -- run resource-contention
 cargo run -p tw-cli -- run disk-service
 cargo run -p tw-cli -- inspect full-adder
+
+# Multi-fidelity: measure transistor circuits (inverter, NAND2, DFF),
+# derive discrete components, then run the analog bridge and the derived
+# components side by side.
+cargo run -p tw-electrical --example multi_fidelity
 ```
 
 ## Configuration
@@ -74,7 +79,7 @@ docs/        design documents (see below)
 | `docs/time-model.md` | Time model: fixed-point ticks, limits, sync options. |
 | `docs/numerical/overview.md` | Numerical foundation (Phase 6) — map. |
 | `docs/numerical/basics_resistor_rc.md` | Basic theory: Resistor, MNA, and RC transient (Backward Euler). |
-| `docs/electrical-simulation.md` | Electrical domain models, automated MNA stamping, CMOS gates, and digital primitives (Phase 7–11). |
+| `docs/electrical-simulation.md` | Electrical domain models, automated MNA stamping, CMOS gates, digital primitives, and the multi-fidelity characterizer / derived component / mixed-signal bridge (Phase 7–12). |
 
 ## Benchmarks
 

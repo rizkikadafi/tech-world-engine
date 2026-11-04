@@ -65,6 +65,71 @@ impl Default for TransientResult {
     }
 }
 
+/// Integrates the energy delivered by an ideal voltage source over a transient.
+///
+/// The MNA convention makes the branch current of a source *negative* when the
+/// source is delivering power to the circuit (see `resistor_networks.rs`).
+/// Therefore the delivered energy is:
+///
+/// ```text
+/// E = ∫ V_source · (−I_source) dt
+/// ```
+///
+/// The integral uses the trapezoidal rule over the recorded time points, which
+/// is exact for constant currents and second-order accurate for smooth ones.
+pub fn integrate_source_energy(
+    result: &TransientResult,
+    source_name: &str,
+    voltage: f64,
+) -> Result<f64, CircuitError> {
+    if result.len() < 2 {
+        return Ok(0.0);
+    }
+
+    let mut energy = 0.0;
+    for i in 1..result.len() {
+        let dt = result.time_points[i] - result.time_points[i - 1];
+        let i_prev = source_current(result, i - 1, source_name).ok_or_else(|| {
+            CircuitError::InvalidElement(format!(
+                "Voltage source '{}' has no branch current in transient result",
+                source_name
+            ))
+        })?;
+        let i_curr = source_current(result, i, source_name).ok_or_else(|| {
+            CircuitError::InvalidElement(format!(
+                "Voltage source '{}' has no branch current in transient result",
+                source_name
+            ))
+        })?;
+        energy += voltage * -(i_prev + i_curr) * 0.5 * dt;
+    }
+
+    Ok(energy)
+}
+
+/// Returns the source current at `index`, falling back to the nearest sample
+/// that carries a branch current.
+///
+/// A transient started from `None` records a synthetic t=0 state without branch
+/// currents. Using the first solved sample for that interval keeps the
+/// trapezoidal integral exact for constant currents.
+fn source_current(result: &TransientResult, index: usize, source_name: &str) -> Option<f64> {
+    if let Some(current) = result.states[index].current(source_name) {
+        return Some(current);
+    }
+    for state in result.states.iter().skip(index + 1) {
+        if let Some(current) = state.current(source_name) {
+            return Some(current);
+        }
+    }
+    for state in result.states.iter().take(index).rev() {
+        if let Some(current) = state.current(source_name) {
+            return Some(current);
+        }
+    }
+    None
+}
+
 /// Solves the DC Operating Point (capacitors treated as open circuits).
 /// Automatically uses Newton-Raphson if nonlinear components (Diodes, MOSFETs) are present.
 pub fn dc_op(circuit: &Circuit) -> Result<CircuitState, CircuitError> {
