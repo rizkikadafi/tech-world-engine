@@ -16,7 +16,7 @@ pub mod prelude;
 pub mod state;
 pub mod subcircuit;
 
-pub use analysis::{dc_op, transient, TransientResult};
+pub use analysis::{dc_op, transient, transient_adaptive, TransientResult};
 pub use circuit::Circuit;
 pub use device::{Capacitor, CurrentSource, Diode, Mosfet, MosfetType, Resistor, VoltageSource};
 pub use digital::{cmos_d_latch, cmos_dff, cmos_full_adder, cmos_half_adder};

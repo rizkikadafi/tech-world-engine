@@ -1,3 +1,6 @@
+use tw_num::error::NumericalError;
+use tw_num::ode::{evaluate_step_lte, StepControlConfig, StepDecision};
+
 use crate::circuit::Circuit;
 use crate::error::CircuitError;
 use crate::mna::MnaSystem;
@@ -46,7 +49,11 @@ impl TransientResult {
     }
 
     /// Extracts the voltage waveform `(t, V)` for a node by name.
-    pub fn voltage_waveform_by_name(&self, circuit: &Circuit, name: &str) -> Option<Vec<(f64, f64)>> {
+    pub fn voltage_waveform_by_name(
+        &self,
+        circuit: &Circuit,
+        name: &str,
+    ) -> Option<Vec<(f64, f64)>> {
         let node = circuit.node_by_name(name)?;
         Some(self.voltage_waveform(node))
     }
@@ -95,12 +102,122 @@ pub fn transient(
     let steps = (t_stop / dt).round() as usize;
     for step in 1..=steps {
         let t = step as f64 * dt;
-        current_state = MnaSystem::solve_circuit(
-            circuit,
-            Some((dt, &current_state)),
-            Some(&current_state),
-        )?;
+        current_state =
+            MnaSystem::solve_circuit(circuit, Some((dt, &current_state)), Some(&current_state))?;
         result.push(t, current_state.clone());
+    }
+
+    Ok(result)
+}
+
+/// Runs an adaptive transient analysis from t=0 to t_stop.
+///
+/// Dynamically adjusts the time step based on Local Truncation Error (LTE)
+/// and handles non-convergence step cuts (dt / 8), modeled after `DCtran`
+/// in `ngspice-47/src/spicelib/analysis/dctran.c`.
+pub fn transient_adaptive(
+    circuit: &Circuit,
+    t_stop: f64,
+    step_config: Option<StepControlConfig>,
+    initial_state: Option<CircuitState>,
+) -> Result<TransientResult, CircuitError> {
+    let config = step_config.unwrap_or_default();
+    if t_stop <= 0.0 {
+        return Err(CircuitError::InvalidElement(format!(
+            "t_stop must be positive, got {}",
+            t_stop
+        )));
+    }
+
+    let mut t = 0.0;
+    let mut dt = config.dt_init.min(t_stop);
+    let mut current_state = initial_state.unwrap_or_default();
+    let mut prev_state: Option<CircuitState> = None;
+    let mut dt_old: Option<f64> = None;
+    let mut first_step = true;
+    let mut result = TransientResult::new();
+
+    // Record t=0
+    result.push(0.0, current_state.clone());
+
+    let nodes = circuit.non_ground_nodes();
+
+    while t < t_stop {
+        if t + dt > t_stop {
+            dt = t_stop - t;
+        }
+
+        let t_cand = t + dt;
+
+        // Attempt solve at candidate step
+        match MnaSystem::solve_circuit(circuit, Some((dt, &current_state)), Some(&current_state)) {
+            Err(_) => {
+                // Non-convergence: cut timestep by 8 (ngspice DCtran convention)
+                dt /= 8.0;
+                if dt < config.dt_min {
+                    return Err(CircuitError::Numerical(NumericalError::NoConvergence {
+                        iterations: 0,
+                        reason: format!(
+                            "Timestep too small ({} < {}) at t={}",
+                            dt, config.dt_min, t
+                        ),
+                    }));
+                }
+                continue;
+            }
+            Ok(candidate_state) => {
+                if first_step {
+                    first_step = false;
+                    t = t_cand;
+                    dt_old = Some(dt);
+                    prev_state = Some(current_state);
+                    current_state = candidate_state;
+                    result.push(t, current_state.clone());
+                    continue;
+                }
+
+                // Evaluate LTE across all non-ground nodes
+                let cand_vec: Vec<f64> =
+                    nodes.iter().map(|&n| candidate_state.voltage(n)).collect();
+                let curr_vec: Vec<f64> = nodes.iter().map(|&n| current_state.voltage(n)).collect();
+                let prev_vec: Option<Vec<f64>> = prev_state
+                    .as_ref()
+                    .map(|ps| nodes.iter().map(|&n| ps.voltage(n)).collect());
+
+                let decision = evaluate_step_lte(
+                    &cand_vec,
+                    &curr_vec,
+                    prev_vec.as_deref(),
+                    dt,
+                    dt_old,
+                    &config,
+                );
+
+                match decision {
+                    StepDecision::Reject { retry_dt } => {
+                        dt = retry_dt;
+                        if dt < config.dt_min {
+                            return Err(CircuitError::Numerical(NumericalError::NoConvergence {
+                                iterations: 0,
+                                reason: format!(
+                                    "Timestep too small in LTE rejection ({} < {}) at t={}",
+                                    dt, config.dt_min, t
+                                ),
+                            }));
+                        }
+                        continue;
+                    }
+                    StepDecision::Accept { next_dt } => {
+                        t = t_cand;
+                        dt_old = Some(dt);
+                        prev_state = Some(current_state);
+                        current_state = candidate_state;
+                        result.push(t, current_state.clone());
+                        dt = next_dt;
+                    }
+                }
+            }
+        }
     }
 
     Ok(result)

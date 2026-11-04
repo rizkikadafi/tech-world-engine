@@ -1,6 +1,7 @@
-//! ODE/DAE integration utilities (placeholder for future milestones).
-//!
-//! Will be extended for Backward Euler, Trapezoidal, BDF with adaptive stepping.
+//! ODE/DAE integration utilities and adaptive step control.
+
 pub mod integrate;
+pub mod lte;
 
 pub use integrate::*;
+pub use lte::{evaluate_step_lte, StepControlConfig, StepDecision};

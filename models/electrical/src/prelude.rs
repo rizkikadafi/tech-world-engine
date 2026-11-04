@@ -1,6 +1,6 @@
 //! Convenient re-exports for `tw-electrical`.
 
-pub use crate::analysis::{dc_op, transient, TransientResult};
+pub use crate::analysis::{dc_op, transient, transient_adaptive, TransientResult};
 pub use crate::circuit::Circuit;
 pub use crate::device::{
     Capacitor, CurrentSource, Diode, Mosfet, MosfetType, Resistor, VoltageSource,

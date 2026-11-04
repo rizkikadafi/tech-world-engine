@@ -18,6 +18,12 @@ pub mod ode;
 pub mod prelude;
 
 pub use error::NumericalError;
-pub use linear::{solve, Matrix, Vector};
-pub use nonlinear::{newton_scalar, NewtonConfig, NewtonResult, NewtonSolver};
-pub use prelude::*;
+pub use linear::{
+    solve, solve_sparse, solve_with_sparse_lu, sparse_lu, Matrix, SparseLu, SparseMatrix, Triplet,
+    Vector,
+};
+pub use nonlinear::{
+    check_convergence, newton_scalar, ConvergenceConfig, NewtonConfig, NewtonResult, NewtonSolver,
+    VariableType,
+};
+pub use ode::{evaluate_step_lte, IntegratorConfig, StepControlConfig, StepDecision};
