@@ -12,7 +12,9 @@ use tw_core::{
 /// `component_states` holds each component's public [`State`] for inspection or
 /// replay; `resources` holds restorable resource state. Component *internal*
 /// fields are not captured generically — a component that needs full restore
-/// support should keep its meaningful state in [`State`].
+/// support should keep its meaningful state in [`State`] and override
+/// [`Component::restore_state`]. Use [`Simulation::restore_components`] and
+/// [`Simulation::restore_resources`] to rewind engine-owned state.
 #[derive(Debug, Clone)]
 pub struct Checkpoint {
     pub time: SimulationTime,
@@ -225,6 +227,39 @@ impl Simulation {
                 resource.restore(snapshot);
             }
         }
+    }
+
+    /// Restore component-owned state from a checkpoint.
+    ///
+    /// Calls [`Component::restore_state`] for every component present in the
+    /// checkpoint. Returns the ids of components that were **not** restored,
+    /// either because they are no longer registered or because they do not
+    /// override `restore_state`.
+    ///
+    /// Resources are not touched; call [`Simulation::restore_resources`] as
+    /// well for a full rewind of engine-owned state. The simulation clock is
+    /// intentionally left untouched.
+    pub fn restore_components(&mut self, checkpoint: &Checkpoint) -> Vec<ComponentId> {
+        let mut skipped = Vec::new();
+        for (id, state) in &checkpoint.component_states {
+            if let Some(component) = self.components.get_mut(id) {
+                if !component.restore_state(state) {
+                    skipped.push(*id);
+                }
+            } else {
+                skipped.push(*id);
+            }
+        }
+        skipped
+    }
+
+    /// Restore both resource state and component state from a checkpoint.
+    ///
+    /// Returns the ids of components that were not restored. See
+    /// [`Simulation::restore_components`] for details.
+    pub fn restore(&mut self, checkpoint: &Checkpoint) -> Vec<ComponentId> {
+        self.restore_resources(checkpoint);
+        self.restore_components(checkpoint)
     }
 
     /// Assign the next engine-authoritative event id.

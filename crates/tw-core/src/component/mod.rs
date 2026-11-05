@@ -29,4 +29,17 @@ pub trait Component: std::fmt::Debug {
     fn on_unmount(&mut self, _ctx: &mut SimulationContext) -> Vec<Event> {
         Vec::new()
     }
+
+    /// Restore component-owned state from a checkpoint snapshot.
+    ///
+    /// The default implementation does nothing and returns `false`, meaning the
+    /// component does not support state restore. Components that keep their
+    /// observable state in [`State`] should copy the snapshot into `self.state`
+    /// (and into any mirrored fields) and return `true`.
+    ///
+    /// This hook is called by `Simulation::restore_components` in `tw-sim`, not
+    /// by the engine automatically.
+    fn restore_state(&mut self, _state: &State) -> bool {
+        false
+    }
 }

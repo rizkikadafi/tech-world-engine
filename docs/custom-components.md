@@ -174,9 +174,8 @@ sim.register_observer(Box::new(Logger));
 ```
 
 `Simulation::checkpoint()` menyimpan `State` setiap komponen dan state resource.
-Saat ini restore otomatis hanya tersedia untuk resource
-(`restore_resources`); komponen yang menyimpan field internal di luar `State`
-tetap perlu mekanisme restore sendiri.
+Saat ini restore otomatis tersedia untuk resource (`restore_resources`).
+Untuk komponen, implementasikan `fn restore_state(&mut self, state: &State) -> bool` – salin nilai snapshot ke `self.state` dan kembalikan `true`. Panggil `sim.restore(&checkpoint)` untuk memulihkan kedua resource dan komponen yang mendukung restore.
 
 ## Lifecycle
 
