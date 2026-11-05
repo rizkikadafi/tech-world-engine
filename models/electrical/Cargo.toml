@@ -13,3 +13,8 @@ log = "0.4"
 
 [dev-dependencies]
 tw-sim = { path = "../../crates/tw-sim" }
+criterion = "0.7"
+
+[[bench]]
+name = "fidelity_scaling"
+harness = false

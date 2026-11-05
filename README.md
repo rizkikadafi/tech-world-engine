@@ -93,3 +93,15 @@ cargo bench -p tw-sim
 This measures event throughput as the number of components grows
 (10 / 100 / 1K / 10K), giving a baseline for the fidelity-vs-performance
 trade-off.
+
+Measure the cost of one NAND switching event at each fidelity:
+
+```bash
+cargo bench -p tw-electrical --bench fidelity_scaling -- --quick
+```
+
+The 1M-component stress test is opt-in:
+
+```bash
+cargo test --release -p tw-electrical --test fidelity_scale -- --ignored --nocapture
+```

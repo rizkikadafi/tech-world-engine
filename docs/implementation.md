@@ -483,6 +483,10 @@ Ini penting agar ekspektasi selaras dengan roadmap:
   `docs/electrical-simulation.md` §6. Yang belum: gerbang lain (NOR/XOR/AND/OR),
   setup/hold formal, input slope berhingga, live fidelity switch, dan cache
   karakterisasi persisten.
+- **Benchmark fidelity sudah ada.** `benches/fidelity_scaling.rs` mengukur satu
+  switching event NAND pada transistor, bridge, dan derived (1–100k gate);
+  `tests/fidelity_scale.rs` menyediakan stress test 1M komponen yang opt-in.
+  Lihat `docs/electrical-simulation.md` §8.
 - **`seed` belum dipakai.** Disimpan untuk model stokastik di masa depan.
 - **`Amount::Continuous`** sudah didukung tipe, tetapi skenario yang ada masih
   memakai `Discrete`.

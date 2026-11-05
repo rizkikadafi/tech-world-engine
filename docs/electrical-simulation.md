@@ -439,3 +439,68 @@ cargo run -p tw-electrical --example fidelity_selection
    - Selanjutnya: gerbang lain (NOR/XOR/AND/OR), input slope berhingga, setup/hold formal, live fidelity switch, dan cache persisten.
 
 Catatan: sparse LU + Markowitz sudah dipakai `MnaSystem`, dan `transient_adaptive` (LTE) sudah tersedia. Keduanya bukan lagi item roadmap.
+
+---
+
+## 8. Benchmark Fidelity (Milestone Besar #3)
+
+Benchmark `models/electrical/benches/fidelity_scaling.rs` mengukur biaya **satu switching event NAND** pada tiga fidelity. Netlist dan hasil karakterisasi NAND2 dibuat sekali di luar region terukur, sehingga yang dibandingkan adalah biaya switching, bukan biaya pengukuran.
+
+Semua kasus menyimulasikan window yang sama: **20 ns** (20 tick pada `TimeBase` default). Transistor menjalankan transient 20 ns; bridge menjalankan `CircuitComponent` sampai 20 tick; derived gate dipicu lalu event loop berhenti pada horizon yang sama.
+
+### Cara menjalankan
+
+```bash
+cargo bench -p tw-electrical --bench fidelity_scaling -- --quick
+```
+
+### Hasil representatif
+
+Angka berikut berasal dari `--quick` pada mesin pengembangan; nilai absolut akan berbeda, tetapi rasionya menunjukkan karakter biaya.
+
+| Kasus | Waktu | Biaya per edge |
+| --- | ---: | ---: |
+| Transistor NAND, satu falling edge (20 ns) | ≈ 13.4 ms | 13.4 ms |
+| Bridge NAND, satu falling edge (20 tick) | ≈ 13.3 ms | 13.3 ms |
+| Derived NAND, 1 gate | ≈ 4.0 µs | 4.0 µs |
+| Derived NAND, 1.000 gate | ≈ 5.9 ms | 5.9 µs |
+| Derived NAND, 10.000 gate | ≈ 162 ms | 16.2 µs |
+| Derived NAND, 100.000 gate | ≈ 1.0 s | 10.0 µs |
+
+Konstruksi derived gate dari measurement cache:
+
+| Jumlah | Waktu | Biaya per komponen |
+| ---: | ---: | ---: |
+| 1 | ≈ 8 µs | 8 µs |
+| 1.000 | ≈ 7.3 ms | 7.3 µs |
+| 100.000 | ≈ 0.67 s | 6.7 µs |
+
+### Interpretasi
+
+- Bridge dan transistor sama-sama didominasi integrasi analog: keduanya sekitar **13 ms per edge** untuk window 20 ns.
+- Satu derived gate sekitar **4 µs per edge**, jadi kira-kira **3.000–3.300× lebih murah** daripada satu edge analog pada kasus satu gate.
+- Pada skala 100.000 gate, biaya per gate naik menjadi sekitar **10 µs** karena event loop, `HashMap` komponen, dan tekanan cache. Meski begitu, 100.000 derived NAND yang switching masih selesai dalam sekitar **1 detik**.
+- Derived gate adalah model event-driven: setelah transisi selesai, tidak ada pekerjaan tambahan sampai input berikutnya. Bridge tetap melakukan langkah analog periodik selama window simulasi.
+
+### Stress test 1 juta komponen
+
+Criterion berhenti di 100.000 komponen karena setiap `DerivedGate` membawa `State` map dan simulation menyimpan seluruh komponen. Untuk mencoba 1 juta:
+
+```bash
+cargo test --release -p tw-electrical --test fidelity_scale -- --ignored --nocapture
+```
+
+Override jumlah komponen bila memori terbatas:
+
+```bash
+TW_SCALE_COMPONENTS=100000 cargo test --release -p tw-electrical --test fidelity_scale -- --ignored --nocapture
+```
+
+Pada 10.000 komponen, stress test mencatat sekitar **34 MiB RSS** setelah build. Ekstrapolasi linear memberi perkiraan beberapa GiB untuk 1 juta komponen, jadi hasil aktual sangat bergantung pada RAM. Test mencetak waktu karakterisasi, build + mount, switch + run, jumlah event, RSS, dan simulated-ns/detik.
+
+### Batas benchmark
+
+- Perbandingan memakai satu NAND2; gerbang lain dan DFF belum diukur.
+- Bridge memakai `sync_interval_ticks = 1` dan `solver_dt` dari hasil karakterisasi.
+- Angka wall time bergantung pada CPU, allocator, dan beban mesin.
+- 1 juta komponen adalah stress test manual, bukan bagian dari CI.

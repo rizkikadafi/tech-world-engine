@@ -282,3 +282,20 @@ Test suites:
 - `tests/mixed_signal_bridge.rs` — analog bridge vs standalone transient, energy, NAND/DFF behavior.
 - `tests/multi_fidelity.rs` — end-to-end `detailed → measure → abstract → validate` for inverter, NAND, and DFF.
 - `tests/fidelity.rs` — identical ports across fidelities, measurement cache reuse, `refine` progression, and exact-netlist selection.
+- `tests/fidelity_scale.rs` — opt-in 1M-component stress test (ignored by default).
+
+## Benchmarks
+
+Measure one NAND switching event at transistor, bridge, and derived fidelity:
+
+```bash
+cargo bench -p tw-electrical --bench fidelity_scaling -- --quick
+```
+
+Run the opt-in large-scale stress test:
+
+```bash
+cargo test --release -p tw-electrical --test fidelity_scale -- --ignored --nocapture
+```
+
+See `docs/electrical-simulation.md` §8 for methodology and representative results.
