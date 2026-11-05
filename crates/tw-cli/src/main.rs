@@ -1,11 +1,13 @@
 //! Tech World Engine CLI.
 //!
-//! The CLI is only an interface: all simulation wiring lives in
+//! Thin command-line interface: all simulation wiring lives in `tw-scene` and
 //! `tw_sim::scenarios`, never here.
 
+use std::path::Path;
 use std::process::ExitCode;
 
 use tw_core::ComponentId;
+use tw_scene::{Registry, Session};
 use tw_sim::scenarios::{counter, digital, disk_service, resource_contention};
 use tw_sim::SimulationEngine;
 
@@ -13,12 +15,14 @@ const USAGE: &str = "\
 Tech World Engine CLI
 
 Usage:
-  tw-cli run <scenario>      Run a scenario and print its result
-  tw-cli inspect <scenario>  Run a scenario and print component state
-  tw-cli list                List available scenarios
-  tw-cli help                Show this help
+  tw-cli run <file.twscene | scenario> [--ticks N]
+  tw-cli inspect <file.twscene | scenario> [--component ID] [--ticks N]
+  tw-cli trace <file.twscene> --component ID [--ticks N]
+  tw-cli list-kinds
+  tw-cli list
+  tw-cli help
 
-Scenarios:
+Builtin Scenarios:
   counter                Generic counter that ticks to a limit
   resource-contention    Three workers competing for a capacity-2 resource
   disk-service           Capacity-1 disk with service time (emergent latency)
@@ -30,8 +34,10 @@ fn main() -> ExitCode {
 
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
-        Some("run") => run(args.get(1).map(String::as_str)),
-        Some("inspect") => inspect(args.get(1).map(String::as_str)),
+        Some("run") => run(&args[1..]),
+        Some("inspect") => inspect(&args[1..]),
+        Some("trace") => trace(&args[1..]),
+        Some("list-kinds") => list_kinds(),
         Some("list") => {
             print!("{USAGE}");
             ExitCode::SUCCESS
@@ -48,41 +54,70 @@ fn main() -> ExitCode {
     }
 }
 
-fn read_state(engine: &SimulationEngine, id: ComponentId, key: &str) -> Option<String> {
-    engine
-        .simulation()
-        .component_state(id)?
-        .get(key)
-        .map(|v| v.to_string())
-}
-
-/// Wrap a scenario's `Simulation` in an engine, applying configuration overrides
-/// from the environment (`TW_MAX_EVENTS`, `TW_SEED`). Engine logs are controlled
-/// separately by `RUST_LOG` (see `env_logger`).
-fn build_engine(simulation: tw_sim::Simulation) -> SimulationEngine {
-    let mut engine = SimulationEngine::new(simulation);
-    apply_env_config(&mut engine);
-    engine
-}
-
-fn apply_env_config(engine: &mut SimulationEngine) {
-    let mut config = engine.simulation().config();
-    if let Some(n) = env_u64("TW_MAX_EVENTS") {
-        config.max_events = Some(n);
+fn parse_flag_u64(args: &[String], flag: &str) -> Option<u64> {
+    for i in 0..args.len() {
+        if args[i] == flag {
+            return args.get(i + 1).and_then(|s| s.parse().ok());
+        }
     }
-    if let Some(n) = env_u64("TW_SEED") {
-        config.seed = n;
+    None
+}
+
+fn is_scene_file(target: &str) -> bool {
+    target.ends_with(".twscene") || Path::new(target).exists()
+}
+
+fn list_kinds() -> ExitCode {
+    let reg = Registry::builtin();
+    println!("Available Component Kinds in Registry:");
+    for kind in reg.kinds() {
+        println!("  - {kind}");
     }
-    engine.simulation_mut().configure(config);
+    ExitCode::SUCCESS
 }
 
-fn env_u64(key: &str) -> Option<u64> {
-    std::env::var(key).ok()?.trim().parse().ok()
-}
+fn run(args: &[String]) -> ExitCode {
+    let target = match args.first() {
+        Some(t) => t.as_str(),
+        None => {
+            eprintln!("error: missing scenario or scene file path\n");
+            eprint!("{USAGE}");
+            return ExitCode::FAILURE;
+        }
+    };
 
-fn run(scenario: Option<&str>) -> ExitCode {
-    match scenario {
-        Some("counter") => {
+    if is_scene_file(target) {
+        let ticks = parse_flag_u64(args, "--ticks").unwrap_or(100);
+        let mut session = match Session::load(target) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("error loading scene '{target}': {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+
+        println!("Running scene '{}' for {} ticks...", session.world().name, ticks);
+        let report = session.step(ticks);
+        println!(
+            "Finished at tick {}, executed {} events.",
+            report.tick, report.events_executed
+        );
+
+        println!("\nFinal Component States:");
+        for id in session.component_ids() {
+            let name = session.component_name(id).unwrap_or("Component");
+            println!("  #{}: '{}'", id.0, name);
+            if let Some(state) = session.component_state(id) {
+                for (k, v) in state.iter() {
+                    println!("    {} = {}", k, v);
+                }
+            }
+        }
+        return ExitCode::SUCCESS;
+    }
+
+    match target {
+        "counter" => {
             let mut engine = build_engine(counter::build(5, 5));
             engine.run_ticks(100);
             println!(
@@ -91,7 +126,7 @@ fn run(scenario: Option<&str>) -> ExitCode {
             );
             ExitCode::SUCCESS
         }
-        Some("resource-contention") => {
+        "resource-contention" => {
             let mut engine = build_engine(resource_contention::build());
             while engine.simulation_mut().step().is_some() {}
             for (label, id) in [
@@ -106,7 +141,7 @@ fn run(scenario: Option<&str>) -> ExitCode {
             }
             ExitCode::SUCCESS
         }
-        Some("disk-service") => {
+        "disk-service" => {
             let mut engine = build_engine(disk_service::build());
             while engine.simulation_mut().step().is_some() {}
             println!("job | arrived | granted | latency");
@@ -121,7 +156,7 @@ fn run(scenario: Option<&str>) -> ExitCode {
             }
             ExitCode::SUCCESS
         }
-        Some("full-adder") => {
+        "full-adder" => {
             println!(" A B Cin | Sum Carry | expected | status");
             let mut ok = true;
             for i in 0..8u8 {
@@ -154,16 +189,77 @@ fn run(scenario: Option<&str>) -> ExitCode {
             }
         }
         other => {
-            eprintln!("error: unknown scenario {other:?}\n");
+            eprintln!("error: unknown scenario '{other}'\n");
             eprint!("{USAGE}");
             ExitCode::FAILURE
         }
     }
 }
 
-fn inspect(scenario: Option<&str>) -> ExitCode {
-    match scenario {
-        Some("counter") => {
+fn inspect(args: &[String]) -> ExitCode {
+    let target = match args.first() {
+        Some(t) => t.as_str(),
+        None => {
+            eprintln!("error: missing scenario or scene file path\n");
+            eprint!("{USAGE}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    if is_scene_file(target) {
+        let ticks = parse_flag_u64(args, "--ticks").unwrap_or(0);
+        let mut session = match Session::load(target) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("error loading scene '{target}': {e}");
+                return ExitCode::FAILURE;
+            }
+        };
+
+        if ticks > 0 {
+            session.step(ticks);
+        }
+
+        let target_comp = parse_flag_u64(args, "--component").map(ComponentId);
+
+        println!("Scene: '{}' (at tick {})", session.world().name, session.current_tick());
+        println!("Components ({}):", session.component_ids().len());
+
+        for id in session.component_ids() {
+            if let Some(filter) = target_comp {
+                if id != filter {
+                    continue;
+                }
+            }
+
+            let name = session.component_name(id).unwrap_or("Component");
+            println!("\n  Component #{}: '{}'", id.0, name);
+
+            if let Some(ports) = session.component_ports(id) {
+                print!("    Ports: ");
+                if ports.is_empty() {
+                    println!("(none)");
+                } else {
+                    let port_descs: Vec<String> = ports
+                        .iter()
+                        .map(|p| format!("{}:{:?}", p.name, p.direction))
+                        .collect();
+                    println!("{}", port_descs.join(", "));
+                }
+            }
+
+            if let Some(state) = session.component_state(id) {
+                println!("    State Variables:");
+                for (k, v) in state.iter() {
+                    println!("      {} = {}", k, v);
+                }
+            }
+        }
+        return ExitCode::SUCCESS;
+    }
+
+    match target {
+        "counter" => {
             let mut engine = build_engine(counter::build(5, 5));
             engine.run_ticks(100);
             println!("components: {}", engine.simulation().component_count());
@@ -173,7 +269,7 @@ fn inspect(scenario: Option<&str>) -> ExitCode {
             );
             ExitCode::SUCCESS
         }
-        Some("resource-contention") => {
+        "resource-contention" => {
             let mut engine = build_engine(resource_contention::build());
             while engine.simulation_mut().step().is_some() {}
             println!("components: {}", engine.simulation().component_count());
@@ -189,7 +285,7 @@ fn inspect(scenario: Option<&str>) -> ExitCode {
             }
             ExitCode::SUCCESS
         }
-        Some("disk-service") => {
+        "disk-service" => {
             let mut engine = build_engine(disk_service::build());
             while engine.simulation_mut().step().is_some() {}
             println!("components: {}", engine.simulation().component_count());
@@ -205,18 +301,111 @@ fn inspect(scenario: Option<&str>) -> ExitCode {
             }
             ExitCode::SUCCESS
         }
-        Some("full-adder") => {
+        "full-adder" => {
             let mut engine = digital::run_full_adder(1, 1, 1, tw_core::TracingMode::Abstract);
             apply_env_config(&mut engine);
             println!("components: {}", engine.simulation().component_count());
-            println!("probe.sum   = {}", read_state(&engine, digital::PROBE_ID, "sum").unwrap_or_default());
-            println!("probe.carry = {}", read_state(&engine, digital::PROBE_ID, "carry").unwrap_or_default());
+            println!(
+                "probe.sum   = {}",
+                read_state(&engine, digital::PROBE_ID, "sum").unwrap_or_default()
+            );
+            println!(
+                "probe.carry = {}",
+                read_state(&engine, digital::PROBE_ID, "carry").unwrap_or_default()
+            );
             ExitCode::SUCCESS
         }
         other => {
-            eprintln!("error: unknown scenario {other:?}\n");
+            eprintln!("error: unknown scenario '{other}'\n");
             eprint!("{USAGE}");
             ExitCode::FAILURE
         }
     }
+}
+
+fn trace(args: &[String]) -> ExitCode {
+    let target = match args.first() {
+        Some(t) => t.as_str(),
+        None => {
+            eprintln!("error: missing scene file path for trace\n");
+            eprint!("{USAGE}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let comp_id = match parse_flag_u64(args, "--component") {
+        Some(id) => ComponentId(id),
+        None => {
+            eprintln!("error: --component <ID> is required for trace\n");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    let ticks = parse_flag_u64(args, "--ticks").unwrap_or(100);
+    let mut session = match Session::load(target) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error loading scene '{target}': {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    session.step(ticks);
+
+    let traces = session.traces_for(comp_id);
+    if traces.is_empty() {
+        println!("No traces recorded for component #{}.", comp_id.0);
+        return ExitCode::SUCCESS;
+    }
+
+    println!(
+        "Component #{} has {} trace events. Most recent causal chain:",
+        comp_id.0,
+        traces.len()
+    );
+
+    let last_trace = session.last_trace_for(comp_id).unwrap();
+    let explanation = session.explain(last_trace);
+
+    for (step_idx, node) in explanation.iter().enumerate() {
+        println!(
+            "  [{}] t={} Trace #{} (Event #{}): {}",
+            step_idx + 1,
+            node.time.ticks(),
+            node.id.0,
+            node.event_id.0,
+            node.description
+        );
+    }
+
+    ExitCode::SUCCESS
+}
+
+fn read_state(engine: &SimulationEngine, id: ComponentId, key: &str) -> Option<String> {
+    engine
+        .simulation()
+        .component_state(id)?
+        .get(key)
+        .map(|v| v.to_string())
+}
+
+fn build_engine(simulation: tw_sim::Simulation) -> SimulationEngine {
+    let mut engine = SimulationEngine::new(simulation);
+    apply_env_config(&mut engine);
+    engine
+}
+
+fn apply_env_config(engine: &mut SimulationEngine) {
+    let mut config = engine.simulation().config();
+    if let Some(n) = env_u64("TW_MAX_EVENTS") {
+        config.max_events = Some(n);
+    }
+    if let Some(n) = env_u64("TW_SEED") {
+        config.seed = n;
+    }
+    engine.simulation_mut().configure(config);
+}
+
+fn env_u64(key: &str) -> Option<u64> {
+    std::env::var(key).ok()?.trim().parse().ok()
 }

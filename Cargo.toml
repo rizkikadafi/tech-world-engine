@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/tw-core",
     "crates/tw-sim",
+    "crates/tw-scene",
     "crates/tw-cli",
     "crates/tw-num",
     "models/electrical",

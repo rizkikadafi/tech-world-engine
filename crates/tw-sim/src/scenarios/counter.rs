@@ -66,6 +66,16 @@ impl Component for Counter {
         }
         next_events
     }
+
+    fn restore_state(&mut self, state: &State) -> bool {
+        if let Some(c) = state.get_int("count") {
+            self.count = c as u64;
+            self.state = state.clone();
+            true
+        } else {
+            false
+        }
+    }
 }
 
 /// Build a counter simulation that ticks `limit` times, `interval` ticks apart.

@@ -1,21 +1,17 @@
 use crate::config::SimulationConfig;
+use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};
 use tw_core::{
     Amount, CausalGraph, Component, ComponentId, Connection, Event, EventId, EventPayload, Observer,
-    Resource, ResourceId, ResourceRequestResult, ResourceSnapshot, SimulationContext,
+    Port, PortId, Resource, ResourceId, ResourceRequestResult, ResourceSnapshot, SimulationContext,
     SimulationTime, Snapshot, State, TraceId, TraceNode, TracingMode,
 };
 
-/// A captured point-in-time view of engine-owned state.
-///
-/// `component_states` holds each component's public [`State`] for inspection or
-/// replay; `resources` holds restorable resource state. Component *internal*
-/// fields are not captured generically — a component that needs full restore
 /// support should keep its meaningful state in [`State`] and override
 /// [`Component::restore_state`]. Use [`Simulation::restore_components`] and
 /// [`Simulation::restore_resources`] to rewind engine-owned state.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Checkpoint {
     pub time: SimulationTime,
     pub component_states: Vec<(ComponentId, State)>,
@@ -94,6 +90,18 @@ impl Simulation {
 
     pub fn current_time(&self) -> SimulationTime {
         self.clock
+    }
+
+    /// Peek the timestamp of the next scheduled event in the queue, if any.
+    pub fn peek_time(&self) -> Option<SimulationTime> {
+        self.event_queue.peek().map(|ScheduledEvent(e)| e.time)
+    }
+
+    /// Advance simulation clock forward to `target` (time cannot move backwards).
+    pub fn advance_time_to(&mut self, target: SimulationTime) {
+        if target > self.clock {
+            self.clock = target;
+        }
     }
 
     pub fn set_tracing_mode(&mut self, mode: TracingMode) {
@@ -180,6 +188,91 @@ impl Simulation {
     /// Borrow the state of a registered component by id.
     pub fn component_state(&self, id: ComponentId) -> Option<&State> {
         self.components.get(&id).map(|c| c.state())
+    }
+
+    /// Sorted list of all registered component IDs.
+    pub fn component_ids(&self) -> Vec<ComponentId> {
+        let mut ids: Vec<ComponentId> = self.components.keys().copied().collect();
+        ids.sort();
+        ids
+    }
+
+    /// Borrow the name of a registered component by id.
+    pub fn component_name(&self, id: ComponentId) -> Option<&str> {
+        self.components.get(&id).map(|c| c.name())
+    }
+
+    /// Borrow the ports of a registered component by id.
+    pub fn component_ports(&self, id: ComponentId) -> Option<&[Port]> {
+        self.components.get(&id).map(|c| c.ports())
+    }
+
+    /// Look up a port of a registered component by port name.
+    pub fn port_by_name(&self, component_id: ComponentId, port_name: &str) -> Option<&Port> {
+        self.components
+            .get(&component_id)?
+            .ports()
+            .iter()
+            .find(|p| p.name == port_name)
+    }
+
+    /// Sorted list of all registered resource IDs.
+    pub fn resource_ids(&self) -> Vec<ResourceId> {
+        let mut ids: Vec<ResourceId> = self.resources.keys().copied().collect();
+        ids.sort();
+        ids
+    }
+
+    /// Capture a snapshot of a single registered resource by id.
+    pub fn resource_snapshot(&self, id: ResourceId) -> Option<ResourceSnapshot> {
+        self.resources.get(&id).map(Resource::snapshot)
+    }
+
+    /// Return all trace IDs associated with a component.
+    pub fn traces_for(&self, component: ComponentId) -> &[TraceId] {
+        self.causal_graph.traces_for(component)
+    }
+
+    /// Return the most recent trace ID associated with a component, if any.
+    pub fn last_trace_for(&self, component: ComponentId) -> Option<TraceId> {
+        self.causal_graph.last_trace_for(component)
+    }
+
+    /// Connect an output port of `source` to an input port of `target` using port names.
+    ///
+    /// Returns an error if either component or port is missing, or if port directions
+    /// are incompatible.
+    pub fn connect(
+        &mut self,
+        source_component: ComponentId,
+        source_port_name: &str,
+        target_component: ComponentId,
+        target_port_name: &str,
+    ) -> Result<(), crate::wiring::WiringError> {
+        let src_port = self
+            .port_by_name(source_component, source_port_name)
+            .ok_or_else(|| crate::wiring::WiringError::UnknownSourcePort {
+                component: source_component,
+                port: PortId(0),
+            })?;
+        let src_port_id = src_port.id;
+
+        let dst_port = self
+            .port_by_name(target_component, target_port_name)
+            .ok_or_else(|| crate::wiring::WiringError::UnknownTargetPort {
+                component: target_component,
+                port: PortId(0),
+            })?;
+        let dst_port_id = dst_port.id;
+
+        let connection = Connection::new(source_component, src_port_id, target_component, dst_port_id);
+        self.register_connection(connection);
+        if let Err(errors) = self.validate_wiring() {
+            if let Some(first) = errors.into_iter().next() {
+                return Err(first);
+            }
+        }
+        Ok(())
     }
 
     /// Number of registered top-level components.
@@ -312,8 +405,13 @@ impl Simulation {
                 event.id.0, event.payload, target_name, event.target.0
             );
             Some(
-                self.causal_graph
-                    .record_event(event.id, event.time, desc, event.cause),
+                self.causal_graph.record_event_with_subject(
+                    event.id,
+                    event.time,
+                    desc,
+                    event.cause,
+                    Some(event.target),
+                ),
             )
         } else {
             event.cause

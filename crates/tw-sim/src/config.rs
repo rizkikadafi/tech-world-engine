@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use tw_core::TracingMode;
 
 /// Engine-wide configuration.
@@ -5,7 +6,7 @@ use tw_core::TracingMode;
 /// `Simulation::new()` uses [`SimulationConfig::default`]; use
 /// [`Simulation::with_config`](crate::Simulation::with_config) (or
 /// [`configure`](crate::Simulation::configure)) to change it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub struct SimulationConfig {
     /// How much causal information to record (see [`TracingMode`]).
     pub tracing_mode: TracingMode,

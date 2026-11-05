@@ -1,8 +1,10 @@
+use crate::component::ComponentId;
 use crate::event::EventId;
 use crate::time::SimulationTime;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum TracingMode {
     /// No causal nodes are recorded. Observation/event log still works.
     /// Use this for large simulations where memory must not grow with events.
@@ -26,18 +28,20 @@ impl TracingMode {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct TraceId(pub u64);
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TraceNode {
     pub id: TraceId,
     pub event_id: EventId,
     pub time: SimulationTime,
     pub description: String,
+    #[serde(default)]
+    pub subject: Option<ComponentId>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CausalEdge {
     pub cause: TraceId,
     pub effect: TraceId,
@@ -48,6 +52,7 @@ pub struct CausalEdge {
 pub struct CausalGraph {
     nodes: HashMap<TraceId, TraceNode>,
     edges: Vec<CausalEdge>,
+    traces_by_component: HashMap<ComponentId, Vec<TraceId>>,
     next_trace_id: u64,
 }
 
@@ -57,6 +62,9 @@ impl CausalGraph {
     }
 
     pub fn add_node(&mut self, node: TraceNode) {
+        if let Some(subject) = node.subject {
+            self.traces_by_component.entry(subject).or_default().push(node.id);
+        }
         self.nodes.insert(node.id, node);
     }
 
@@ -71,6 +79,17 @@ impl CausalGraph {
         description: impl Into<String>,
         cause: Option<TraceId>,
     ) -> TraceId {
+        self.record_event_with_subject(event_id, time, description, cause, None)
+    }
+
+    pub fn record_event_with_subject(
+        &mut self,
+        event_id: EventId,
+        time: SimulationTime,
+        description: impl Into<String>,
+        cause: Option<TraceId>,
+        subject: Option<ComponentId>,
+    ) -> TraceId {
         self.next_trace_id += 1;
         let trace_id = TraceId(self.next_trace_id);
         let node = TraceNode {
@@ -78,6 +97,7 @@ impl CausalGraph {
             event_id,
             time,
             description: description.into(),
+            subject,
         };
         self.add_node(node);
 
@@ -90,6 +110,19 @@ impl CausalGraph {
         }
 
         trace_id
+    }
+
+    /// Return all trace IDs associated with `component`.
+    pub fn traces_for(&self, component: ComponentId) -> &[TraceId] {
+        self.traces_by_component
+            .get(&component)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[])
+    }
+
+    /// Return the most recent trace ID associated with `component`, if any.
+    pub fn last_trace_for(&self, component: ComponentId) -> Option<TraceId> {
+        self.traces_for(component).last().copied()
     }
 
     pub fn nodes(&self) -> &HashMap<TraceId, TraceNode> {

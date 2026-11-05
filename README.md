@@ -12,6 +12,7 @@ Domain concepts are modeled as *components*, *ports*, *connections*, and
 | --- | --- |
 | `tw-core` | Pure primitives: time, state, events, components, ports, connections, resources, observation, and causal tracing. **No** simulation loop. |
 | `tw-sim` | The engine that runs it: `Simulation`, `SimulationEngine`, shared scenarios, checkpointing, and configuration. |
+| `tw-scene` | Declarative world layer: `.twscene` schema (JSON), `Registry` for user component factories, and `Session` client façade for CLI & Godot. |
 | `tw-cli` | Thin command-line interface. Contains **no** simulation logic. |
 | `tw-num` | Domain-agnostic numerical foundation (Phase 6): Dense LU, matrix/vector, linear and nonlinear solve. |
 | `tw-electrical` | Domain electrical models (Phase 7–12): Circuit netlist, automated MNA stamping, DC OP/transient solvers, CMOS gates, digital primitives (adders, D latch, DFF), automated characterizer, derived discrete components, a mixed-signal `CircuitComponent` bridge, and construction-time fidelity selection/refinement. |
@@ -19,9 +20,10 @@ Domain concepts are modeled as *components*, *ports*, *connections*, and
 The dependency direction is one-way:
 
 ```text
-tw-cli  →  tw-sim  →  tw-core
-                           ▲
-models/electrical ─────────┴──► tw-num
+tw-cli  ──►  tw-scene  ──►  tw-sim  ──►  tw-core
+(Godot) ──►  tw-scene                      ▲
+                                            │
+models/electrical ──────────────────────────┴──► tw-num
 ```
 
 ## Quick start
@@ -30,6 +32,15 @@ models/electrical ─────────┴──► tw-num
 cargo build
 cargo test
 
+# Run declarative .twscene worlds
+cargo run -p tw-cli -- list-kinds
+cargo run -p tw-cli -- run scenes/counter.twscene --ticks 50
+cargo run -p tw-cli -- run scenes/logic_gates.twscene
+cargo run -p tw-cli -- run scenes/disk_service.twscene
+cargo run -p tw-cli -- inspect scenes/logic_gates.twscene
+cargo run -p tw-cli -- trace scenes/logic_gates.twscene --component 2
+
+# Builtin scenarios
 cargo run -p tw-cli -- list
 cargo run -p tw-cli -- run counter
 cargo run -p tw-cli -- run resource-contention
@@ -75,8 +86,12 @@ docs/        design documents (see below)
 
 ## Documentation
 
+> 📖 **[Tech World Engine Manual & Architecture Guide (`docs/manual/`)](docs/manual/README.md)**  
+> Comprehensive structured guide covering Vision & Philosophy, Crate Architecture, Custom Component Authoring, Declarative `.twscene` & CLI, Physics & Multi-Fidelity, and Godot GDExtension Integration.
+
 | Document | Contents |
 | --- | --- |
+| `docs/manual/README.md` | **Official structured manual & reading guide (Recommended)**. |
 | `docs/implementation.md` | What is actually implemented today, and its limits. |
 | `docs/custom-components.md` | Guide to implementing your own components on the public `tw-core` / `tw-sim` API. |
 | `docs/engine.md` | Roadmap variant — Phase 0 to 12. |

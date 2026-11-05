@@ -1,0 +1,22 @@
+{
+  "name": "logic-gates-demo",
+  "ticks_per_second": 1000,
+  "components": [
+    {
+      "id": 1,
+      "kind": "Gate",
+      "params": { "gate": "XOR" }
+    },
+    {
+      "id": 2,
+      "kind": "Gate",
+      "params": { "gate": "AND" }
+    }
+  ],
+  "stimuli": [
+    { "at": 0, "component": 1, "port": "in_a", "value": 1 },
+    { "at": 0, "component": 1, "port": "in_b", "value": 1 },
+    { "at": 0, "component": 2, "port": "in_a", "value": 1 },
+    { "at": 0, "component": 2, "port": "in_b", "value": 1 }
+  ]
+}

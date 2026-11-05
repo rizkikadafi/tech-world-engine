@@ -1,0 +1,17 @@
+{
+  "name": "disk-service-demo",
+  "ticks_per_second": 1000,
+  "resources": [
+    { "id": 100, "name": "Disk", "capacity": 1, "service_time": 3 }
+  ],
+  "components": [
+    { "id": 1, "kind": "DiskJob", "params": { "name": "Job1", "resource": 100 } },
+    { "id": 2, "kind": "DiskJob", "params": { "name": "Job2", "resource": 100 } },
+    { "id": 3, "kind": "DiskJob", "params": { "name": "Job3", "resource": 100 } }
+  ],
+  "stimuli": [
+    { "at": 0, "component": 1, "tick": true },
+    { "at": 1, "component": 2, "tick": true },
+    { "at": 2, "component": 3, "tick": true }
+  ]
+}

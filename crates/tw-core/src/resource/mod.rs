@@ -1,10 +1,11 @@
+use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::fmt;
 
 use crate::component::ComponentId;
 use crate::tracing::TraceId;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ResourceId(pub u64);
 
 /// A quantity that can be allocated from a resource.
@@ -14,7 +15,7 @@ pub struct ResourceId(pub u64);
 /// resources (bandwidth, power, memory) use [`Amount::Continuous`]. The two
 /// kinds never mix call by call; a request whose kind does not match the
 /// resource capacity is rejected.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum Amount {
     Discrete(u64),
     Continuous(f64),
@@ -128,7 +129,7 @@ impl From<f64> for Amount {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PendingRequest {
     pub requester: ComponentId,
     pub amount: Amount,
@@ -137,7 +138,7 @@ pub struct PendingRequest {
     pub cause: Option<TraceId>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GrantedRequest {
     pub requester: ComponentId,
     pub amount: Amount,
@@ -164,7 +165,7 @@ pub enum ResourceRequestResult {
     Invalid { reason: ResourceError },
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ResourceSnapshot {
     pub id: ResourceId,
     pub capacity: Amount,

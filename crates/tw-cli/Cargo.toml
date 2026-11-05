@@ -8,5 +8,6 @@ license.workspace = true
 [dependencies]
 tw-core = { path = "../tw-core" }
 tw-sim = { path = "../tw-sim" }
+tw-scene = { path = "../tw-scene" }
 log = "0.4"
 env_logger = "0.11"

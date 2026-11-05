@@ -1,0 +1,14 @@
+{
+  "name": "counter-demo",
+  "ticks_per_second": 1000,
+  "components": [
+    {
+      "id": 1,
+      "kind": "Counter",
+      "params": { "name": "Counter1", "limit": 10, "interval": 5 }
+    }
+  ],
+  "stimuli": [
+    { "at": 0, "component": 1, "tick": true }
+  ]
+}

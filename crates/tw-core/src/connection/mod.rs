@@ -1,6 +1,8 @@
 use crate::component::{ComponentId, PortId};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Connection {
     pub source_component: ComponentId,
     pub source_port: PortId,

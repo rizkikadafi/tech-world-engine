@@ -1,4 +1,5 @@
 use crate::time::SimulationTime;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
 
@@ -8,7 +9,8 @@ use std::fmt;
 /// `CPUState`, `TransistorState`, ...). Components describe their own state
 /// using these generic scalar kinds. Vectors/structured data can be encoded as
 /// several keys or as `Text` until a richer representation is needed.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
 pub enum StateValue {
     Bool(bool),
     Int(i64),
@@ -119,7 +121,7 @@ macro_rules! impl_from_int {
 impl_from_int!(i8, i16, i32, i64, isize, u8, u16, u32, u64, usize);
 
 /// Component-owned state: a set of typed variables keyed by name.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct State {
     variables: HashMap<String, StateValue>,
 }
@@ -180,7 +182,7 @@ impl State {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Snapshot {
     pub time: SimulationTime,
     pub state: State,

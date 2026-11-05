@@ -3,11 +3,12 @@ use crate::resource::{Amount, ResourceId};
 use crate::state::StateValue;
 use crate::time::SimulationTime;
 use crate::tracing::TraceId;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct EventId(pub u64);
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum EventPayload {
     SignalChanged { name: String, value: StateValue },
     PortSignal { port_id: PortId, value: StateValue },
@@ -36,7 +37,7 @@ pub enum EventPayload {
     },
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Event {
     pub id: EventId,
     pub time: SimulationTime,

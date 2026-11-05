@@ -59,3 +59,48 @@ fn nodes_are_numbered_from_one_and_increment() {
     assert_eq!(a, TraceId(1));
     assert_eq!(b, TraceId(2));
 }
+
+#[test]
+fn traces_by_component_and_serialization() {
+    use tw_core::{ComponentId, TraceNode};
+
+    let mut graph = CausalGraph::new();
+    let comp1 = ComponentId(10);
+    let comp2 = ComponentId(20);
+
+    let t1 = graph.record_event_with_subject(
+        EventId(1),
+        SimulationTime::new(0),
+        "tick comp1",
+        None,
+        Some(comp1),
+    );
+    let t2 = graph.record_event_with_subject(
+        EventId(2),
+        SimulationTime::new(1),
+        "tick comp2",
+        Some(t1),
+        Some(comp2),
+    );
+    let t3 = graph.record_event_with_subject(
+        EventId(3),
+        SimulationTime::new(2),
+        "step comp1",
+        Some(t2),
+        Some(comp1),
+    );
+
+    assert_eq!(graph.traces_for(comp1), &[t1, t3]);
+    assert_eq!(graph.last_trace_for(comp1), Some(t3));
+    assert_eq!(graph.traces_for(comp2), &[t2]);
+    assert_eq!(graph.last_trace_for(comp2), Some(t2));
+    assert_eq!(graph.traces_for(ComponentId(99)), &[]);
+    assert_eq!(graph.last_trace_for(ComponentId(99)), None);
+
+    // Serialization roundtrip
+    let node = graph.nodes().get(&t1).unwrap();
+    let json = serde_json::to_string(node).unwrap();
+    let deserialized: TraceNode = serde_json::from_str(&json).unwrap();
+    assert_eq!(deserialized, *node);
+    assert_eq!(deserialized.subject, Some(comp1));
+}
