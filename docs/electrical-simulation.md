@@ -432,8 +432,9 @@ cargo run -p tw-electrical --example fidelity_selection
 
 1. **Larger Digital Units (Register, ALU Slice)**:
    - Menyusun register dari beberapa `cmos_dff`, lalu unit aritmatika dari full adder.
-2. **Benchmark Fidelity (Milestone Besar #3)**:
+2. **Benchmark Fidelity (Milestone Besar #3) — selesai**:
    - Membandingkan biaya komputasi 1 NAND transistor vs 1.000–1.000.000 `DerivedGate`.
+   - Hasil dan metodologi ada di §8; stress test 1M bersifat opt-in.
 3. **Multi-Fidelity Lanjutan**:
    - Slice 1–3 (inverter, NAND 2-input, DFF) dan lapisan `fidelity.rs` (selection, `refine`, cache) sudah selesai.
    - Selanjutnya: gerbang lain (NOR/XOR/AND/OR), input slope berhingga, setup/hold formal, live fidelity switch, dan cache persisten.
