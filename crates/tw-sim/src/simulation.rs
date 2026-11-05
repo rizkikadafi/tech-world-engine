@@ -126,6 +126,23 @@ impl Simulation {
         self.connections.push(connection);
     }
 
+    /// Check that every registered connection refers to existing components and
+    /// ports with compatible signal directions.
+    ///
+    /// Call this after wiring a simulation to catch typos before running. The
+    /// engine does not validate connections at registration time, and an
+    /// unmatched `PortSignal` is simply not forwarded.
+    ///
+    /// ```
+    /// use tw_sim::Simulation;
+    ///
+    /// let sim = Simulation::new();
+    /// assert!(sim.validate_wiring().is_ok());
+    /// ```
+    pub fn validate_wiring(&self) -> Result<(), Vec<crate::wiring::WiringError>> {
+        crate::wiring::validate(&self.components, &self.connections)
+    }
+
     pub fn register_observer(&mut self, observer: Box<dyn Observer>) {
         self.observers.push(observer);
     }

@@ -36,6 +36,9 @@ cargo run -p tw-cli -- run resource-contention
 cargo run -p tw-cli -- run disk-service
 cargo run -p tw-cli -- inspect full-adder
 
+# Build your own component with the public engine API.
+cargo run -p tw-sim --example custom_component
+
 # Multi-fidelity: measure transistor circuits (inverter, NAND2, DFF),
 # derive discrete components, then run the analog bridge and the derived
 # components side by side.
@@ -75,6 +78,7 @@ docs/        design documents (see below)
 | Document | Contents |
 | --- | --- |
 | `docs/implementation.md` | What is actually implemented today, and its limits. |
+| `docs/custom-components.md` | Guide to implementing your own components on the public `tw-core` / `tw-sim` API. |
 | `docs/engine.md` | Roadmap variant — Phase 0 to 12. |
 | `docs/engine-v1.md` | Roadmap variant — Phase 0 to 16, including the Godot phase. |
 | `docs/plan.md` | Architecture and system design. |

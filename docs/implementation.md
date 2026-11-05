@@ -487,6 +487,12 @@ Ini penting agar ekspektasi selaras dengan roadmap:
   switching event NAND pada transistor, bridge, dan derived (1–100k gate);
   `tests/fidelity_scale.rs` menyediakan stress test 1M komponen yang opt-in.
   Lihat `docs/electrical-simulation.md` §8.
+- **Extension path sudah teruji.** `docs/custom-components.md` memandu membuat
+  komponen sendiri lewat API publik; `examples/custom_component.rs` dan
+  `tests/custom_component.rs` menjadi contoh konkret. `Simulation::validate_wiring`
+  melaporkan port/komponen yang salah sebelum simulasi berjalan.
+- **Restore komponen belum ada.** Checkpoint menyimpan `State` tiap komponen,
+  tetapi restore otomatis baru tersedia untuk resource (`restore_resources`).
 - **`seed` belum dipakai.** Disimpan untuk model stokastik di masa depan.
 - **`Amount::Continuous`** sudah didukung tipe, tetapi skenario yang ada masih
   memakai `Discrete`.
@@ -499,6 +505,7 @@ Ini penting agar ekspektasi selaras dengan roadmap:
 - `engine.md` — roadmap alternatif + milestone.
 - `plan.md` — desain arsitektur & sistem.
 - `general-simulation-core.md` — dasar teoritis (state transition, DES, tracing).
+- `custom-components.md` — panduan membuat komponen sendiri.
 - `resource.md` — filosofi sistem resource.
 - `project-structure.md` — struktur crate & dependency.
 - `models/README.md` — aturan model domain.
