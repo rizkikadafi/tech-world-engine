@@ -5,8 +5,8 @@ pub use crate::analysis::{
 };
 pub use crate::bridge::{BridgeConfig, BridgeInput, BridgeOutput, CircuitComponent};
 pub use crate::characterization::{
-    CharacterizationConfig, Characterizer, GateCharacterization, GateKind, LogicLevels,
-    TimingMetrics, TruthTable,
+    CharacterizationConfig, Characterizer, CircuitTemplate, GateCharacterization, GateKind,
+    LogicLevels, Measurement, TemplateInput, TimingMetrics, TruthTable,
 };
 pub use crate::circuit::Circuit;
 pub use crate::derived::{DerivedDff, DerivedError, DerivedGate, TimingTicks};
@@ -15,6 +15,7 @@ pub use crate::device::{
 };
 pub use crate::digital::{cmos_d_latch, cmos_dff, cmos_full_adder, cmos_half_adder};
 pub use crate::error::CircuitError;
+pub use crate::fidelity::{ComponentSpec, Fidelity, FidelityError, FidelityFactory, Model};
 pub use crate::gates::{
     cmos_and, cmos_inverter, cmos_nand, cmos_nor, cmos_or, cmos_xor, CmosGateConfig,
 };

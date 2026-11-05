@@ -12,6 +12,7 @@ pub mod derived;
 pub mod device;
 pub mod digital;
 pub mod error;
+pub mod fidelity;
 pub mod gates;
 pub mod mna;
 pub mod node;
@@ -25,14 +26,15 @@ pub use analysis::{
 };
 pub use bridge::{BridgeConfig, BridgeInput, BridgeOutput, CircuitComponent};
 pub use characterization::{
-    CharacterizationConfig, Characterizer, GateCharacterization, GateKind, LogicLevels,
-    TimingMetrics, TruthTable,
+    CharacterizationConfig, Characterizer, CircuitTemplate, GateCharacterization, GateKind,
+    LogicLevels, Measurement, TemplateInput, TimingMetrics, TruthTable,
 };
 pub use circuit::Circuit;
 pub use derived::{DerivedDff, DerivedError, DerivedGate, TimingTicks};
 pub use device::{Capacitor, CurrentSource, Diode, Mosfet, MosfetType, Resistor, VoltageSource};
 pub use digital::{cmos_d_latch, cmos_dff, cmos_full_adder, cmos_half_adder};
 pub use error::CircuitError;
+pub use fidelity::{ComponentSpec, Fidelity, FidelityError, FidelityFactory, Model};
 pub use gates::{cmos_and, cmos_inverter, cmos_nand, cmos_nor, cmos_or, cmos_xor, CmosGateConfig};
 pub use mna::MnaSystem;
 pub use node::NodeId;

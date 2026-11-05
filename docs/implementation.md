@@ -476,11 +476,13 @@ Ini penting agar ekspektasi selaras dengan roadmap:
 - **Model domain electrical sudah ada.** `models/electrical` berisi netlist,
   MNA, transient, CMOS gates, dan digital primitives. Model domain lain
   (CPU/RAM/network) belum ada.
-- **Multi-fidelity slice 1–3 sudah ada.** `tw-electrical` memiliki characterizer,
-  `DerivedGate`/`DerivedDff`, dan mixed-signal bridge untuk inverter, NAND 2-input,
-  dan DFF (Phase 12 slice 1–3). Lihat `docs/electrical-simulation.md` §6. Yang
-  belum: gerbang lain (NOR/XOR/AND/OR), setup/hold formal, pemilihan fidelity
-  otomatis, dan `refine()`/`select_fidelity()`.
+- **Multi-fidelity slice 1–3 + fidelity layer sudah ada.** `tw-electrical`
+  memiliki characterizer, `DerivedGate`/`DerivedDff`, mixed-signal bridge, dan
+  `FidelityFactory` (`select`, `select_component`, `refine`, cache in-memory) untuk
+  inverter, NAND 2-input, dan DFF (Phase 12/13). Lihat
+  `docs/electrical-simulation.md` §6. Yang belum: gerbang lain (NOR/XOR/AND/OR),
+  setup/hold formal, input slope berhingga, live fidelity switch, dan cache
+  karakterisasi persisten.
 - **`seed` belum dipakai.** Disimpan untuk model stokastik di masa depan.
 - **`Amount::Continuous`** sudah didukung tipe, tetapi skenario yang ada masih
   memakai `Discrete`.

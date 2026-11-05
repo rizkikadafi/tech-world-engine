@@ -11,6 +11,8 @@
 //! Nothing here hardcodes gate logic: the truth table is obtained from `dc_op`
 //! on the same physical circuit that produces the timing numbers.
 
+use tw_core::PortId;
+
 use crate::analysis::{dc_op, integrate_source_energy, transient, TransientResult};
 use crate::circuit::Circuit;
 use crate::digital::cmos_dff;
@@ -222,7 +224,7 @@ impl TruthTable {
 }
 
 /// Kind of physical circuit being characterized.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum GateKind {
     /// Single-input CMOS inverter.
     Inverter,
@@ -275,6 +277,56 @@ pub struct GateCharacterization {
     pub config: CharacterizationConfig,
 }
 
+/// One discrete input bound to a voltage source in a [`CircuitTemplate`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TemplateInput {
+    /// Port id used by the discrete/derived component.
+    pub port_id: PortId,
+    /// Human-readable port name.
+    pub name: &'static str,
+    /// Voltage source inside the circuit driven by this input.
+    pub source_name: String,
+}
+
+/// A physical netlist together with the port mapping needed to expose it to the
+/// discrete event engine.
+///
+/// The characterizer returns the same template it measured, so a mixed-signal
+/// bridge built from it is guaranteed to wrap the exact circuit that produced
+/// the timing numbers.
+#[derive(Debug, Clone)]
+pub struct CircuitTemplate {
+    /// Transistor-level netlist.
+    pub circuit: Circuit,
+    /// Input bindings, in truth-table bit order.
+    pub inputs: Vec<TemplateInput>,
+    /// Node sampled as the primary output.
+    pub output_node: NodeId,
+    /// Discrete port id for the primary output.
+    pub output_port: PortId,
+    /// Name of the supply source, if the circuit has one.
+    pub supply_source: Option<String>,
+}
+
+impl CircuitTemplate {
+    /// Voltage-source names in the same order as [`Self::inputs`].
+    pub fn input_sources(&self) -> Vec<String> {
+        self.inputs
+            .iter()
+            .map(|input| input.source_name.clone())
+            .collect()
+    }
+}
+
+/// A characterization result plus the netlist that produced it.
+#[derive(Debug, Clone)]
+pub struct Measurement {
+    /// Measured metrics and truth table.
+    pub gate: GateCharacterization,
+    /// Physical circuit and port mapping used for the measurement.
+    pub template: CircuitTemplate,
+}
+
 /// Input values before and after a single logic step.
 struct EdgeStimulus<'a> {
     initial: &'a [bool],
@@ -307,13 +359,47 @@ impl Characterizer {
         &self.config
     }
 
+    /// Characterizes a physical circuit and returns both the measured metrics
+    /// and the netlist that produced them.
+    pub fn measure(&self, kind: GateKind) -> Result<Measurement, CircuitError> {
+        match kind {
+            GateKind::Inverter => self.measure_inverter(),
+            GateKind::Nand2 => self.measure_nand2(),
+            GateKind::Dff => self.measure_dff(),
+        }
+    }
+
     /// Characterizes a physical CMOS inverter.
     pub fn inverter(&self) -> Result<GateCharacterization, CircuitError> {
-        let (circuit, n_out, input_sources) = self.build_inverter()?;
-        self.characterize(
+        Ok(self.measure_inverter()?.gate)
+    }
+
+    /// Characterizes a physical 2-input CMOS NAND.
+    ///
+    /// The falling edge is measured with `A` held high while `B` rises, and the
+    /// rising edge with both inputs high while `B` falls. This isolates a single
+    /// input step, which is the quantity a derived gate needs.
+    pub fn nand2(&self) -> Result<GateCharacterization, CircuitError> {
+        Ok(self.measure_nand2()?.gate)
+    }
+
+    /// Characterizes a physical positive-edge-triggered D flip-flop.
+    ///
+    /// The clock-to-Q delay is measured for both output edges, together with
+    /// the supply energy of each edge. The returned truth table is the
+    /// *next-state* table: after a rising clock edge `Q` equals `D`, so the
+    /// `CLK` column is a don't-care.
+    pub fn dff(&self) -> Result<GateCharacterization, CircuitError> {
+        Ok(self.measure_dff()?.gate)
+    }
+
+    fn measure_inverter(&self) -> Result<Measurement, CircuitError> {
+        let template = self.build_inverter()?;
+        let input_sources = template.input_sources();
+        let gate = self.characterize(
             GateKind::Inverter,
-            circuit,
-            n_out,
+            template.circuit.clone(),
+            template.output_node,
             &input_sources,
             // Falling output: IN 0 -> Vdd.
             EdgeStimulus {
@@ -325,20 +411,17 @@ impl Characterizer {
                 initial: &[true],
                 final_values: &[false],
             },
-        )
+        )?;
+        Ok(Measurement { gate, template })
     }
 
-    /// Characterizes a physical 2-input CMOS NAND.
-    ///
-    /// The falling edge is measured with `A` held high while `B` rises, and the
-    /// rising edge with both inputs high while `B` falls. This isolates a single
-    /// input step, which is the quantity a derived gate needs.
-    pub fn nand2(&self) -> Result<GateCharacterization, CircuitError> {
-        let (circuit, n_out, input_sources) = self.build_nand2()?;
-        self.characterize(
+    fn measure_nand2(&self) -> Result<Measurement, CircuitError> {
+        let template = self.build_nand2()?;
+        let input_sources = template.input_sources();
+        let gate = self.characterize(
             GateKind::Nand2,
-            circuit,
-            n_out,
+            template.circuit.clone(),
+            template.output_node,
             &input_sources,
             // Falling output: A=1, B 0 -> 1 (both high).
             EdgeStimulus {
@@ -350,17 +433,15 @@ impl Characterizer {
                 initial: &[true, true],
                 final_values: &[true, false],
             },
-        )
+        )?;
+        Ok(Measurement { gate, template })
     }
 
-    /// Characterizes a physical positive-edge-triggered D flip-flop.
-    ///
-    /// The clock-to-Q delay is measured for both output edges, together with
-    /// the supply energy of each edge. The returned truth table is the
-    /// *next-state* table: after a rising clock edge `Q` equals `D`, so the
-    /// `CLK` column is a don't-care.
-    pub fn dff(&self) -> Result<GateCharacterization, CircuitError> {
-        let (mut circuit, n_q, input_sources) = self.build_dff()?;
+    fn measure_dff(&self) -> Result<Measurement, CircuitError> {
+        let template = self.build_dff()?;
+        let mut circuit = template.circuit.clone();
+        let n_q = template.output_node;
+        let input_sources = template.input_sources();
         let d_source = input_sources[0].clone();
         let clk_source = input_sources[1].clone();
 
@@ -454,13 +535,14 @@ impl Characterizer {
             energy_per_cycle: energy_rise + energy_fall,
         };
 
-        Ok(GateCharacterization {
+        let gate = GateCharacterization {
             kind: GateKind::Dff,
             truth_table,
             levels,
             timing,
             config: self.config.clone(),
-        })
+        };
+        Ok(Measurement { gate, template })
     }
 
     fn drive_dff(
@@ -630,7 +712,7 @@ impl Characterizer {
         Ok(())
     }
 
-    fn build_inverter(&self) -> Result<(Circuit, NodeId, Vec<String>), CircuitError> {
+    fn build_inverter(&self) -> Result<CircuitTemplate, CircuitError> {
         let mut circuit = Circuit::new();
         let n_vdd = circuit.get_or_add_node("vdd");
         let n_in = circuit.get_or_add_node("in");
@@ -659,10 +741,20 @@ impl Characterizer {
             circuit.add_capacitor("CL", n_out, NodeId::GROUND, self.config.load_capacitance);
         }
 
-        Ok((circuit, n_out, vec![self.config.input_source.clone()]))
+        Ok(CircuitTemplate {
+            circuit,
+            inputs: vec![TemplateInput {
+                port_id: PortId(1),
+                name: "IN",
+                source_name: self.config.input_source.clone(),
+            }],
+            output_node: n_out,
+            output_port: PortId(2),
+            supply_source: Some(self.config.supply_source.clone()),
+        })
     }
 
-    fn build_nand2(&self) -> Result<(Circuit, NodeId, Vec<String>), CircuitError> {
+    fn build_nand2(&self) -> Result<CircuitTemplate, CircuitError> {
         let mut circuit = Circuit::new();
         let n_vdd = circuit.get_or_add_node("vdd");
         let n_a = circuit.get_or_add_node("a");
@@ -697,10 +789,27 @@ impl Characterizer {
             circuit.add_capacitor("CL", n_out, NodeId::GROUND, self.config.load_capacitance);
         }
 
-        Ok((circuit, n_out, vec![source_a, source_b]))
+        Ok(CircuitTemplate {
+            circuit,
+            inputs: vec![
+                TemplateInput {
+                    port_id: PortId(1),
+                    name: "A",
+                    source_name: source_a,
+                },
+                TemplateInput {
+                    port_id: PortId(2),
+                    name: "B",
+                    source_name: source_b,
+                },
+            ],
+            output_node: n_out,
+            output_port: PortId(3),
+            supply_source: Some(self.config.supply_source.clone()),
+        })
     }
 
-    fn build_dff(&self) -> Result<(Circuit, NodeId, Vec<String>), CircuitError> {
+    fn build_dff(&self) -> Result<CircuitTemplate, CircuitError> {
         let mut circuit = Circuit::new();
         let n_vdd = circuit.get_or_add_node("vdd");
         let n_d = circuit.get_or_add_node("d");
@@ -737,7 +846,24 @@ impl Characterizer {
             circuit.add_capacitor("CL_Q", n_q, NodeId::GROUND, self.config.load_capacitance);
         }
 
-        Ok((circuit, n_q, vec![source_d, source_clk]))
+        Ok(CircuitTemplate {
+            circuit,
+            inputs: vec![
+                TemplateInput {
+                    port_id: PortId(1),
+                    name: "D",
+                    source_name: source_d,
+                },
+                TemplateInput {
+                    port_id: PortId(2),
+                    name: "CLK",
+                    source_name: source_clk,
+                },
+            ],
+            output_node: n_q,
+            output_port: PortId(3),
+            supply_source: Some(self.config.supply_source.clone()),
+        })
     }
 }
 

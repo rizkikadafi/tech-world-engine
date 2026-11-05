@@ -16,5 +16,5 @@ domain concept is a *model*, not part of the engine.
 
 ## Crates in `models/`
 
-- [`electrical/`](file:///home/rkcode/Projects/tech-world-engine/models/electrical) (`tw-electrical`): circuit representation, automated MNA stamping, DC OP and transient solvers using `tw-num`, CMOS gates and digital primitives, plus the Phase 12 slice 1–3 characterizer (inverter/NAND/DFF), derived components, and mixed-signal bridge.
+- [`electrical/`](file:///home/rkcode/Projects/tech-world-engine/models/electrical) (`tw-electrical`): circuit representation, automated MNA stamping, DC OP and transient solvers using `tw-num`, CMOS gates and digital primitives, plus the Phase 12 characterizer (inverter/NAND/DFF), derived components, mixed-signal bridge, and construction-time fidelity selection/refinement.
 

@@ -267,6 +267,8 @@ pub struct TimeBase {
 - `nand2()` — NAND 2-input; edge turun diukur dengan `A=1` dan `B` naik, edge naik dengan `A=1` dan `B` turun.
 - `dff()` — master-slave D flip-flop positive-edge-triggered.
 
+Selain itu `measure(kind)` mengembalikan `Measurement { gate, template }`. `template` adalah `CircuitTemplate` berisi netlist fisik yang **persis** dipakai untuk pengukuran, port map diskrit, node output, dan nama supply. Template inilah yang dipakai ulang oleh bridge, sehingga model analog tidak pernah dibangun dari netlist yang berbeda.
+
 Langkah umum untuk gerbang kombinasional:
 
 1. Menjalankan `dc_op` untuk semua kombinasi input → tabel kebenaran serta level logika terukur (`LogicLevels`).
@@ -360,7 +362,53 @@ bridge  output transitions: [(0, false), (22, true), (47, false)]
 derived output transitions: [(0, false), (22, true), (47, false)]
 ```
 
-### E. Batas implementasi saat ini
+### E. Fidelity selection & refinement (`fidelity.rs`)
+
+`fidelity.rs` menyatukan ketiga representasi di belakang satu deskripsi komponen:
+
+```rust
+pub enum Fidelity {
+    Transistor, // netlist mentah
+    Bridge,     // CircuitComponent (mixed-signal)
+    Derived,    // DerivedGate / DerivedDff (diskrit)
+}
+
+pub struct ComponentSpec {
+    pub id: ComponentId,
+    pub name: String,
+    pub kind: GateKind,
+}
+```
+
+`FidelityFactory` menyimpan `Characterizer` dan cache in-memory per `GateKind`:
+
+```rust
+let mut factory = FidelityFactory::with_defaults();
+let spec = ComponentSpec::new(ComponentId(1), "INV1", GateKind::Inverter);
+
+let derived = factory.select_component(&spec, Fidelity::Derived)?;
+let bridge  = factory.select_component(&spec, Fidelity::Bridge)?;
+let netlist = factory.select(&spec, Fidelity::Transistor)?;
+```
+
+Jaminan penting:
+
+- **Port identik.** Derived dan bridge memakai port map yang sama: inverter `IN=1, OUT=2`; NAND `A=1, B=2, OUT=3`; DFF `D=1, CLK=2, Q=3`.
+- **Satu netlist.** `select(Transistor)` mengembalikan `template.circuit.clone()`, dan bridge membungkus netlist yang sama — bukan hasil `build_*` terpisah.
+- **Satu pengukuran.** Hasil karakterisasi di-cache per `GateKind`. DFF yang butuh beberapa detik hanya diukur sekali per factory; `is_cached()`/`cached_count()` mengekspos status cache.
+- **Threshold terukur.** Ambang output bridge memakai `levels.threshold(mid_threshold)` hasil ukur, bukan angka hardcoded.
+- **Refinement monoton.** `refine()` bergerak `Derived → Bridge → Transistor`; meminta detail dari `Transistor` menghasilkan `FidelityError::AlreadyMostDetailed`.
+- **Batas yang jelas.** `select_component(Transistor)` menghasilkan `FidelityError::NotAComponent`; bungkus dengan `Fidelity::Bridge` untuk menjalankannya di `tw-sim`.
+
+Pemilihan dilakukan saat **konstruksi**. Mengganti fidelity di tengah simulasi (live switch) belum didukung; cache juga masih in-memory, belum persisten antar-proses.
+
+Contoh:
+
+```bash
+cargo run -p tw-electrical --example fidelity_selection
+```
+
+### F. Batas implementasi saat ini
 
 - Inverter, NAND 2-input, dan DFF sudah end-to-end. Gerbang lain (NOR, XOR, AND, OR) belum punya entry point characterizer/derived.
 - Stimulus berupa step ideal; slope input berhingga belum dimodelkan.
@@ -370,12 +418,13 @@ derived output transitions: [(0, false), (22, true), (47, false)]
 - State analog internal bridge belum ikut checkpoint/restore penuh; hanya nilai bermakna yang disimpan di `State`.
 - Bridge dengan sirkuit bistabil memakai startup transient, bukan analisis DC dengan initial condition eksplisit.
 
-### F. Test yang membuktikan alur
+### G. Test yang membuktikan alur
 
 - `tests/characterization.rs` — metrik inverter/NAND/DFF masuk akal, konvergensi saat Δt dibagi dua, truth table cocok dengan `dc_op`, dan sanity check tanda energi.
 - `tests/derived_components.rs` — delay sesuai hasil ukur, pembatalan event basi, state metrik terukur, `DerivedDff` hanya menangkap pada edge naik.
 - `tests/mixed_signal_bridge.rs` — output bridge cocok dengan transient standalone, akumulasi energi, validasi konfigurasi, perilaku NAND dan DFF.
 - `tests/multi_fidelity.rs` — `detailed → measure → abstract → validate` untuk inverter, NAND 2-input, dan DFF, termasuk perbandingan tick transisi bridge vs derived (toleransi 1 tick).
+- `tests/fidelity.rs` — port identik antar-fidelity untuk ketiga `GateKind`, cache karakterisasi benar-benar dipakai ulang, urutan `refine`, netlist transistor identik dengan template pengukuran, dan paritas inverter derived vs bridge end-to-end.
 
 ---
 
@@ -383,10 +432,10 @@ derived output transitions: [(0, false), (22, true), (47, false)]
 
 1. **Larger Digital Units (Register, ALU Slice)**:
    - Menyusun register dari beberapa `cmos_dff`, lalu unit aritmatika dari full adder.
-2. **Adaptive Timestep & LTE Control (Phase 6 / N4)**:
-   - Memilih $\Delta t$ secara dinamis berdasarkan laju perubahan tegangan (*Local Truncation Error*).
-3. **Sparse Matrix Formulation (Phase 6 / N2)**:
-   - Mengalihkan backend `tw-electrical` dari dense matrix ke sparse matrix (`CSR`/`CSC` + Markowitz LU) untuk rangkaian dengan ratusan/ribuan gerbang logika.
-4. **Multi-Fidelity Lanjutan**:
-   - Slice 1–3 (inverter, NAND 2-input, DFF) sudah selesai.
-   - Selanjutnya: gerbang lain (NOR/XOR/AND/OR), input slope berhingga, setup/hold formal, dan pemilihan fidelity otomatis.
+2. **Benchmark Fidelity (Milestone Besar #3)**:
+   - Membandingkan biaya komputasi 1 NAND transistor vs 1.000–1.000.000 `DerivedGate`.
+3. **Multi-Fidelity Lanjutan**:
+   - Slice 1–3 (inverter, NAND 2-input, DFF) dan lapisan `fidelity.rs` (selection, `refine`, cache) sudah selesai.
+   - Selanjutnya: gerbang lain (NOR/XOR/AND/OR), input slope berhingga, setup/hold formal, live fidelity switch, dan cache persisten.
+
+Catatan: sparse LU + Markowitz sudah dipakai `MnaSystem`, dan `transient_adaptive` (LTE) sudah tersedia. Keduanya bukan lagi item roadmap.

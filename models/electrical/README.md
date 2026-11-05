@@ -221,10 +221,42 @@ voltage sources from discrete `PortSignal` events, advances the transient
 solver periodically, and emits `PortSignal` events back to `tw-sim`; bistable
 circuits that fail the initial DC solve fall back to a short startup transient.
 
+### Fidelity Selection & Refinement
+`FidelityFactory` builds any of the three representations from one
+`ComponentSpec`, with an in-memory characterization cache per `GateKind`:
+
+```rust
+let mut factory = FidelityFactory::with_defaults();
+let spec = ComponentSpec::new(ComponentId(1), "INV1", GateKind::Inverter);
+
+let derived = factory.select_component(&spec, Fidelity::Derived)?;
+let bridge  = factory.select_component(&spec, Fidelity::Bridge)?;
+let netlist = factory.select(&spec, Fidelity::Transistor)?;
+
+assert_eq!(derived.ports(), bridge.ports());
+
+// Derived -> Bridge -> Transistor
+let bridge = factory.refine(&spec, Fidelity::Derived)?;
+let transistor = factory.refine(&spec, Fidelity::Bridge)?;
+```
+
+`select(Transistor)` returns the exact netlist that was measured, and the bridge
+wraps that same netlist, so the abstract and analog models cannot diverge.
+`select_component(Transistor)` returns `FidelityError::NotAComponent`; refine
+past `Transistor` returns `FidelityError::AlreadyMostDetailed`. Selection is a
+construction-time decision; live mid-simulation switching and persistent caches
+are not implemented yet.
+
 Run the walkthrough (inverter, NAND 2-input, and DFF):
 
 ```bash
 cargo run -p tw-electrical --example multi_fidelity
+```
+
+Demonstrate fidelity selection and `refine`:
+
+```bash
+cargo run -p tw-electrical --example fidelity_selection
 ```
 
 See `docs/electrical-simulation.md` §6 for the measurement method, energy
@@ -249,3 +281,4 @@ Test suites:
 - `tests/derived_components.rs` — derived gate/DFF delay, stale-edge cancellation, state.
 - `tests/mixed_signal_bridge.rs` — analog bridge vs standalone transient, energy, NAND/DFF behavior.
 - `tests/multi_fidelity.rs` — end-to-end `detailed → measure → abstract → validate` for inverter, NAND, and DFF.
+- `tests/fidelity.rs` — identical ports across fidelities, measurement cache reuse, `refine` progression, and exact-netlist selection.
