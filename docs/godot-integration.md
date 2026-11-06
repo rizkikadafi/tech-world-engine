@@ -5,12 +5,27 @@ dari kondisi implementasi saat ini. Isinya mencakup: arsitektur target, perubaha
 yang harus disiapkan pada kode existing, format dunia (`.twscene`), permukaan API
 yang diekspos ke Godot, rencana verifikasi, serta risikonya.
 
-Dokumen ini adalah **rencana implementasi**, bukan catatan hasil. Untuk melihat
-apa yang benar-benar ada sekarang, baca `implementation.md`.
+Dokumen ini adalah **rencana implementasi** sekaligus catatan status. Untuk
+perilaku engine yang benar-benar ada di luar Godot, baca `implementation.md`.
 
-> Status: **rencana**. Fase A (lapisan netral) disepakati untuk dikerjakan lebih
-> dulu; Fase B (adapter GDExtension) menyusul. Lihat §15 untuk keputusan yang
-> masih terbuka.
+> Status: **Fase A selesai; Fase B terimplementasi.** Lapisan netral
+> (`tw-scene`, `.twscene`, `Session`, CLI) sudah ada, dan adapter GDExtension
+> ada di `crates/tw-godot` + project demo di `godot/`.
+>
+> Verifikasi tanpa Godot: `cargo test --workspace`, `./godot/build.sh`.
+> Verifikasi dengan Godot 4.7.x:
+> `godot --headless --path godot --import` lalu
+> `godot --headless --path godot --script res://tests/smoke.gd`.
+>
+> Catatan implementasi:
+> - `tw-godot` memakai `godot` 0.5.5 (`api-4-7`) dan Rust 1.95.0
+>   (`rust-toolchain.toml`).
+> - State perubahan memakai model **pull** (`take_state_changes()`), bukan signal
+>   push, untuk menghindari double-borrow saat memanggil balik GDScript.
+> - `Session` sekarang menyediakan `checkpoint_json()` / `restore_json()` agar
+>   format checkpoint sama untuk CLI dan Godot.
+> - §15 (keputusan terbuka) sudah diputuskan: Godot 4.7.x + `godot` 0.5.5 +
+>   Rust 1.95.0.
 
 ---
 

@@ -14,6 +14,7 @@ Domain concepts are modeled as *components*, *ports*, *connections*, and
 | `tw-sim` | The engine that runs it: `Simulation`, `SimulationEngine`, shared scenarios, checkpointing, and configuration. |
 | `tw-scene` | Declarative world layer: `.twscene` schema (JSON), `Registry` for user component factories, and `Session` client façade for CLI & Godot. |
 | `tw-cli` | Thin command-line interface. Contains **no** simulation logic. |
+| `tw-godot` | Thin GDExtension adapter (`cdylib`) exposing `tw-scene::Session` as a Godot 4 `SimulationHost` node. Contains **no** simulation logic. |
 | `tw-num` | Domain-agnostic numerical foundation (Phase 6): Dense LU, matrix/vector, linear and nonlinear solve. |
 | `tw-electrical` | Domain electrical models (Phase 7–12): Circuit netlist, automated MNA stamping, DC OP/transient solvers, CMOS gates, digital primitives (adders, D latch, DFF), automated characterizer, derived discrete components, a mixed-signal `CircuitComponent` bridge, and construction-time fidelity selection/refinement. |
 
@@ -21,7 +22,7 @@ The dependency direction is one-way:
 
 ```text
 tw-cli  ──►  tw-scene  ──►  tw-sim  ──►  tw-core
-(Godot) ──►  tw-scene                      ▲
+tw-godot ──►  tw-scene                      ▲
                                             │
 models/electrical ──────────────────────────┴──► tw-num
 ```
@@ -59,6 +60,26 @@ cargo run -p tw-electrical --example multi_fidelity
 cargo run -p tw-electrical --example fidelity_selection
 ```
 
+## Godot integration
+
+The engine runs headless from the CLI; Godot is only a client.
+
+```bash
+# Build the GDExtension and copy it into the Godot project.
+./godot/build.sh
+
+# Open the demo (requires Godot 4.7.x).
+godot --path godot
+
+# Headless smoke test for the adapter.
+godot --headless --path godot --import
+godot --headless --path godot --script res://tests/smoke.gd
+```
+
+See [`godot/README.md`](godot/README.md) for the API surface and state-flow
+model. `rust-toolchain.toml` pins Rust 1.95.0 because `godot` 0.5.5 requires
+≥1.94.
+
 ## Configuration
 
 Engine-wide settings (tracing mode, event cap, seed) live in
@@ -79,8 +100,9 @@ RUST_LOG=tw_sim=trace TW_MAX_EVENTS=5 cargo run -p tw-cli -- run counter
 ## Repository layout
 
 ```text
-crates/      workspace members (tw-core, tw-sim, tw-cli, tw-num)
+crates/      workspace members (tw-core, tw-sim, tw-scene, tw-cli, tw-num, tw-godot)
 models/      domain models built on the engine (tw-electrical)
+godot/       Godot 4 demo project + GDExtension packaging
 docs/        design documents (see below)
 ```
 
@@ -97,7 +119,7 @@ docs/        design documents (see below)
 | `docs/engine.md` | Roadmap variant — Phase 0 to 12. |
 | `docs/engine-v1.md` | Roadmap variant — Phase 0 to 16, including the Godot phase. |
 | `docs/plan.md` | Architecture and system design. |
-| `docs/godot-integration.md` | How the engine will be integrated into Godot (plan). |
+| `docs/godot-integration.md` | Godot integration design + implementation status (Fase A & B). |
 | `docs/time-model.md` | Time model: fixed-point ticks, limits, sync options. |
 | `docs/numerical/overview.md` | Numerical foundation (Phase 6) — map. |
 | `docs/numerical/basics_resistor_rc.md` | Basic theory: Resistor, MNA, and RC transient (Backward Euler). |

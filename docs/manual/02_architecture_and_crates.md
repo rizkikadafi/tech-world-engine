@@ -118,6 +118,16 @@ Klien terminal mandiri. Tidak memiliki logika simulasi internal; semua pemuatan 
 
 ---
 
+### D2. `crates/tw-godot` — Adapter GDExtension
+`cdylib` tipis yang mengekspos `tw-scene::Session` sebagai node Godot 4 bernama `SimulationHost`.
+
+* **Tanpa logika simulasi**: hanya memuat world, mengubah `delta` detik menjadi tick integer, memetakan `StateValue`/`Port`/`TraceNode` ke `Variant`, dan meneruskan stimulus.
+* **Model pull**: GDScript memanggil `take_state_changes()` setiap frame; tidak ada pemanggilan balik ke GDScript dari dalam `#[func]` yang memegang borrow.
+* **Checkpoint JSON**: `checkpoint_json()` / `restore_json()` berbagi format dengan CLI.
+* **Project demo**: `godot/` berisi `project.godot`, skena demo, dan smoke test headless.
+
+---
+
 ### E. `crates/tw-num` — Fondasi Matematika Numerik
 Domain-agnostic numerical mathematics. Tidak memiliki dependensi ke konsep kelistrikan.
 

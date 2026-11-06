@@ -108,3 +108,33 @@ fn session_checkpoint_and_restore() {
     let state_restored = session.component_state(ComponentId(1)).unwrap().clone();
     assert_eq!(state_before, state_restored);
 }
+
+#[test]
+fn checkpoint_json_roundtrip_restores_component_state() {
+    let json = r#"{
+      "name": "checkpoint-json-test",
+      "components": [
+        { "id": 1, "kind": "Counter", "params": { "limit": 10, "interval": 1 } }
+      ],
+      "stimuli": [
+        { "at": 0, "component": 1, "tick": true }
+      ]
+    }"#;
+
+    let world = World::from_json_str(json).unwrap();
+    let mut session = Session::from_world(world, Registry::builtin()).unwrap();
+
+    session.step(5);
+    let state_before = session.component_state(ComponentId(1)).unwrap().clone();
+
+    let checkpoint = session.checkpoint_json().unwrap();
+    assert!(checkpoint.contains("component_states"));
+
+    session.step(5);
+    let state_after = session.component_state(ComponentId(1)).unwrap().clone();
+    assert_ne!(state_before, state_after);
+
+    session.restore_json(&checkpoint).unwrap();
+    let state_restored = session.component_state(ComponentId(1)).unwrap().clone();
+    assert_eq!(state_before, state_restored);
+}

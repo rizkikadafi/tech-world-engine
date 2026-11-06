@@ -101,7 +101,21 @@ for change in session.take_state_changes() {
 
 ## 5. Cetak Biru Implementasi (`tw-godot`)
 
-Berikut adalah kerangka implementasi node `SimulationHost` yang menghubungkan Godot ke `Session`:
+> **Implementasi aktual** ada di `crates/tw-godot/src/{lib,convert,clock}.rs`,
+> dengan project demo di `godot/`. Perbedaan penting dari kerangka di bawah:
+>
+> - Method pemuatan bernama `load_world()` dan mendukung `res://` / `user://`
+>   lewat `GFile` (bukan `std::fs`), sehingga build PCK tetap bekerja.
+> - Perubahan state memakai **pull**: GDScript memanggil `take_state_changes()`
+>   setiap frame. Signal push tidak dipakai untuk state, karena memanggil balik
+>   GDScript di tengah `#[func]` yang memegang `&mut self` berisiko
+>   double-borrow.
+> - `process(delta)` di godot-rust 0.5.5 memakai `f32`; konversi ke tick
+>   dilakukan oleh `TickClock` (`crates/tw-godot/src/clock.rs`).
+> - Checkpoint disimpan sebagai JSON via `Session::checkpoint_json()` /
+>   `restore_json()`.
+>
+> Kerangka berikut tetap berguna sebagai peta konsep.
 
 ### File: `crates/tw-godot/src/lib.rs`
 
@@ -172,7 +186,7 @@ impl SimulationHost {
     fn state_changed(component_id: i64, key: GString, new_value: GString);
 
     #[func]
-    pub fn load_scene(&mut self, file_path: GString) -> bool {
+    pub fn load_world(&mut self, file_path: GString) -> bool {
         match Session::load(file_path.to_string()) {
             Ok(s) => {
                 self.session = Some(s);
@@ -230,7 +244,7 @@ func _ready():
     sim_host.state_changed.connect(_on_simulation_state_changed)
     
     # 2. Muat file skenario dunia .twscene
-    sim_host.load_scene("res://scenes/counter.twscene")
+    sim_host.load_world("res://worlds/counter.twscene")
 
 func _on_simulation_state_changed(component_id: int, key: String, new_value: String):
     # Komponen #1 (Counter) variabel 'count'

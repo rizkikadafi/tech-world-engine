@@ -6,6 +6,7 @@ members = [
     "crates/tw-scene",
     "crates/tw-cli",
     "crates/tw-num",
+    "crates/tw-godot",
     "models/electrical",
 ]
 

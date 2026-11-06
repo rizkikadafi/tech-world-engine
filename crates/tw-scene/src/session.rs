@@ -272,6 +272,21 @@ impl Session {
         self.sim.restore(checkpoint);
     }
 
+    /// Serialize the current checkpoint to JSON.
+    ///
+    /// This is the single checkpoint format shared by the CLI, tests, and
+    /// frontend adapters (e.g. Godot).
+    pub fn checkpoint_json(&mut self) -> Result<String, SceneError> {
+        Ok(serde_json::to_string(&self.checkpoint())?)
+    }
+
+    /// Restore a checkpoint previously produced by [`Session::checkpoint_json`].
+    pub fn restore_json(&mut self, json: &str) -> Result<(), SceneError> {
+        let checkpoint: Checkpoint = serde_json::from_str(json)?;
+        self.restore(&checkpoint);
+        Ok(())
+    }
+
     pub fn inner_simulation(&self) -> &Simulation {
         &self.sim
     }

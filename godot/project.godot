@@ -1,0 +1,24 @@
+; Engine configuration file.
+; Tech World Engine — Godot demo project.
+;
+; Requires the GDExtension build in addons/tw_godot/bin/.
+; See godot/README.md for build instructions.
+
+config_version=5
+
+[application]
+
+config/name="Tech World Engine Demo"
+config/description="Thin GDExtension adapter for the Tech World discrete-event engine."
+run/main_scene="res://scenes/demo.tscn"
+config/features=PackedStringArray("4.7", "GL Compatibility")
+
+[display]
+
+window/size/viewport_width=960
+window/size/viewport_height=540
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"

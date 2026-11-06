@@ -4,3 +4,7 @@ Cargo.lock
 .idea/
 .vscode/
 *.swp
+
+# Godot GDExtension build artifacts
+godot/addons/tw_godot/bin/
+godot/.godot/
