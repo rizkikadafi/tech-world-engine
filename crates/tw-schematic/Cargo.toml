@@ -1,0 +1,12 @@
+[package]
+name = "tw-schematic"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tw-electrical = { path = "../../models/electrical" }

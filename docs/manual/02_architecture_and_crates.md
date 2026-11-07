@@ -38,6 +38,16 @@ Arah ketergantungan antar-crate bersifat **satu arah ke bawah**:
        └──────────────────────────────────────┘
 ```
 
+Lapisan authoring rangkaian berada di atas domain fisika:
+
+```text
+tw-schematic ──► models/electrical (tw-electrical) ──► tw-num / tw-core
+```
+
+`tw-schematic` menyimpan dokumen yang bisa diedit (part, pin, wire, posisi,
+command/undo); `tw-electrical` tetap menjadi satu-satunya pemilik solver dan
+netlist hasil compile.
+
 > [!IMPORTANT]
 > **Aturan Dependensi:**
 > 1. `tw-core` tidak pernah mengimpor crate mana pun di workspace ini.
@@ -125,6 +135,27 @@ Klien terminal mandiri. Tidak memiliki logika simulasi internal; semua pemuatan 
 * **Model pull**: GDScript memanggil `take_state_changes()` setiap frame; tidak ada pemanggilan balik ke GDScript dari dalam `#[func]` yang memegang borrow.
 * **Checkpoint JSON**: `checkpoint_json()` / `restore_json()` berbagi format dengan CLI.
 * **Project demo**: `godot/` berisi `project.godot`, skena demo, dan smoke test headless.
+
+---
+
+### D3. `crates/tw-schematic` — Lapisan Authoring Rangkaian
+Dokumen rangkaian yang bisa diedit pemain. Lapisan ini **tidak memiliki fisika**: ia hanya menyimpan part, pin, wire, posisi 2D, dan riwayat edit, lalu mengompilasinya menjadi `tw-electrical::Circuit` untuk disolver.
+
+* **Model dokumen ([`document.rs`](file:///home/rkcode/Projects/tech-world-engine/crates/tw-schematic/src/document.rs))**:
+  - `CircuitDocument` menyimpan `parts`, `wires`, nama, dan `version: 1` (JSON stabil untuk save/load).
+  - Part bawaan: resistor, kapasitor, sumber tegangan/arus, ground, dioda, NMOS/PMOS, lampu, saklar, dan probe.
+  - `Wire` menghubungkan dua `PinRef`; titik routing hanya data presentasi dan tidak memengaruhi konektivitas.
+* **Resolusi net ([`net.rs`](file:///home/rkcode/Projects/tech-world-engine/crates/tw-schematic/src/net.rs))**:
+  - Union-find atas seluruh pin menghasilkan `NetId` deterministik; semua pin ground dilebur ke `NetId::GROUND`.
+* **Validasi ([`validate.rs`](file:///home/rkcode/Projects/tech-world-engine/crates/tw-schematic/src/validate.rs))**:
+  - Error: ID duplikat, pin/part tak dikenal, self-wire, parameter tidak valid, ground hilang/tak terhubung, sumber ter-short.
+  - Warning: pin menggantung dan koneksi duplikat (lazim saat pengguna masih menggambar).
+* **Kompilasi ([`compile.rs`](file:///home/rkcode/Projects/tech-world-engine/crates/tw-schematic/src/compile.rs))**:
+  - Memetakan net ke `NodeId`, memanggil API netlist `tw-electrical`, dan menyimpan `CompiledCircuit` berisi pemetaan pin→node serta probe untuk query tegangan.
+  - Lampu dan saklar dikompilasi sebagai resistor; probe hanya merekam node.
+* **Command & sesi ([`command.rs`](file:///home/rkcode/Projects/tech-world-engine/crates/tw-schematic/src/command.rs))**:
+  - `Command` (`AddPart`, `RemovePart`, `MovePart`, `SetParam`, `RenamePart`, `Connect`, `Disconnect`) dengan undo/redo.
+  - `SchematicSession` menyimpan cache compile dan state DC; setiap edit menaikkan `revision` dan membatalkan cache.
 
 ---
 
