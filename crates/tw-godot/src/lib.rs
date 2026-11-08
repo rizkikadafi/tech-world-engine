@@ -10,8 +10,10 @@
 
 mod clock;
 mod convert;
+mod schematic;
+mod schematic_convert;
 
-use std::io::Read;
+use std::io::{Read, Write};
 
 use godot::classes::file_access::ModeFlags;
 use godot::classes::{INode, Node};
@@ -22,6 +24,8 @@ use tw_core::{ComponentId, TraceId, TracingMode};
 use tw_scene::{Registry, Session, World};
 
 use clock::TickClock;
+
+pub use schematic::SchematicHost;
 
 /// Hard cap so a long editor/debugger pause cannot make one frame execute an
 /// unbounded number of simulation events.
@@ -409,6 +413,10 @@ impl SimulationHost {
     }
 }
 
+fn is_godot_path(path: &str) -> bool {
+    path.starts_with("res://") || path.starts_with("user://")
+}
+
 fn read_godot_text(path: &str) -> Result<String, String> {
     let mut file = GFile::open(&GString::from(path), ModeFlags::READ)
         .map_err(|error| format!("cannot open '{}': {}", path, error))?;
@@ -416,4 +424,14 @@ fn read_godot_text(path: &str) -> Result<String, String> {
     file.read_to_string(&mut text)
         .map_err(|error| format!("cannot read '{}': {}", path, error))?;
     Ok(text)
+}
+
+fn write_godot_text(path: &str, text: &str) -> Result<(), String> {
+    let mut file = GFile::open(&GString::from(path), ModeFlags::WRITE)
+        .map_err(|error| format!("cannot open '{}' for writing: {}", path, error))?;
+    file.write_all(text.as_bytes())
+        .map_err(|error| format!("cannot write '{}': {}", path, error))?;
+    file.flush()
+        .map_err(|error| format!("cannot flush '{}': {}", path, error))?;
+    Ok(())
 }

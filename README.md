@@ -14,7 +14,7 @@ Domain concepts are modeled as *components*, *ports*, *connections*, and
 | `tw-sim` | The engine that runs it: `Simulation`, `SimulationEngine`, shared scenarios, checkpointing, and configuration. |
 | `tw-scene` | Declarative world layer: `.twscene` schema (JSON), `Registry` for user component factories, and `Session` client façade for CLI & Godot. |
 | `tw-cli` | Thin command-line interface. Contains **no** simulation logic. |
-| `tw-godot` | Thin GDExtension adapter (`cdylib`) exposing `tw-scene::Session` as a Godot 4 `SimulationHost` node. Contains **no** simulation logic. |
+| `tw-godot` | Thin GDExtension adapter (`cdylib`) exposing `tw-scene::Session` as a Godot 4 `SimulationHost` node and `tw-schematic` authoring as a `SchematicHost` node. Contains **no** simulation or authoring logic. |
 | `tw-num` | Domain-agnostic numerical foundation (Phase 6): Dense LU, matrix/vector, linear and nonlinear solve. |
 | `tw-electrical` | Domain electrical models (Phase 7–12): Circuit netlist, automated MNA stamping, DC OP/transient solvers, CMOS gates, digital primitives (adders, D latch, DFF), automated characterizer, derived discrete components, a mixed-signal `CircuitComponent` bridge, and construction-time fidelity selection/refinement. |
 | `tw-schematic` | Editable circuit documents for the game layer: parts, pins, wires, net resolution, validation, commands/undo-redo, JSON persistence, and compilation to `tw-electrical::Circuit`. **No** physics/solver logic. |
@@ -24,8 +24,8 @@ The dependency direction is one-way:
 ```text
 tw-cli  ──►  tw-scene  ──►  tw-sim  ──►  tw-core
 tw-godot ──►  tw-scene                      ▲
-                                            │
-tw-schematic ──►  models/electrical ────────┴──► tw-num
+    │                                       │
+    └────►  tw-schematic ──►  models/electrical ──► tw-num
 ```
 
 ## Quick start

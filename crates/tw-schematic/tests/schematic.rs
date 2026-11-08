@@ -51,6 +51,21 @@ fn voltage_divider() -> CircuitDocument {
 }
 
 #[test]
+fn part_kind_ids_roundtrip_and_new_parts_have_defaults() {
+    for kind in PartKind::ALL {
+        assert_eq!(PartKind::from_id(kind.id()), Some(kind));
+    }
+    assert_eq!(PartKind::from_id("not-a-kind"), None);
+
+    let resistor = Part::new("r1", PartKind::Resistor, Point2::default());
+    assert_eq!(resistor.f64_param("resistance", 0.0), 1000.0);
+
+    let switch = Part::new("sw", PartKind::Switch, Point2::default());
+    assert!(!switch.bool_param("closed", true));
+    assert_eq!(switch.f64_param("off_resistance", 0.0), 1e9);
+}
+
+#[test]
 fn voltage_divider_solves_dc() {
     let document = voltage_divider();
 

@@ -10,5 +10,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 godot = { version = "0.5.5", features = ["api-4-7"] }
+serde_json = "1"
 tw-core = { path = "../tw-core" }
 tw-scene = { path = "../tw-scene" }
+tw-schematic = { path = "../tw-schematic" }

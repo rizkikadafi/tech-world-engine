@@ -14,6 +14,7 @@ extends Node2D
 func _ready() -> void:
 	$UI/SignalButton.pressed.connect(_on_inject_tick)
 	$UI/ReplayButton.pressed.connect(_on_replay)
+	$UI/EditorButton.pressed.connect(_on_open_editor)
 
 	var error := sim.load_world("res://worlds/counter.twscene")
 	if error != OK:
@@ -40,3 +41,7 @@ func _on_inject_tick() -> void:
 func _on_replay() -> void:
 	sim.load_world("res://worlds/counter.twscene")
 	count_label.text = "Count: 0 / 10"
+
+
+func _on_open_editor() -> void:
+	get_tree().change_scene_to_file("res://scenes/schematic_editor.tscn")

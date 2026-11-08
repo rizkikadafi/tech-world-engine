@@ -258,6 +258,47 @@ impl PartKind {
         }
     }
 
+    /// Parse a stable kind ID (the same string returned by [`PartKind::id`]).
+    pub fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.id() == id)
+    }
+
+    /// Default parameters used when a part is placed in the editor.
+    ///
+    /// These mirror the fallbacks used by validation and compilation, so a
+    /// freshly placed part is immediately solvable.
+    pub fn default_params(self) -> BTreeMap<String, Value> {
+        let mut params = BTreeMap::new();
+        match self {
+            PartKind::Resistor => {
+                params.insert("resistance".to_string(), Value::from(1000.0));
+            }
+            PartKind::Capacitor => {
+                params.insert("capacitance".to_string(), Value::from(1e-6));
+            }
+            PartKind::VoltageSource => {
+                params.insert("voltage".to_string(), Value::from(5.0));
+            }
+            PartKind::CurrentSource => {
+                params.insert("current".to_string(), Value::from(0.001));
+            }
+            PartKind::Lamp => {
+                params.insert("resistance".to_string(), Value::from(100.0));
+            }
+            PartKind::Switch => {
+                params.insert("closed".to_string(), Value::from(false));
+                params.insert("on_resistance".to_string(), Value::from(1e-3));
+                params.insert("off_resistance".to_string(), Value::from(1e9));
+            }
+            PartKind::Nmos | PartKind::Pmos => {
+                params.insert("vth".to_string(), Value::from(0.8));
+                params.insert("beta".to_string(), Value::from(1e-3));
+            }
+            PartKind::Ground | PartKind::Diode | PartKind::Probe => {}
+        }
+        params
+    }
+
     /// Human-readable name for the editor palette.
     pub fn display_name(self) -> &'static str {
         match self {
@@ -322,7 +363,7 @@ impl Part {
         Self {
             id: id.into(),
             kind,
-            params: BTreeMap::new(),
+            params: kind.default_params(),
             position,
             rotation: 0.0,
             label: None,

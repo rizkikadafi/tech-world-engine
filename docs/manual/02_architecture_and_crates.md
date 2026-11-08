@@ -42,6 +42,9 @@ Lapisan authoring rangkaian berada di atas domain fisika:
 
 ```text
 tw-schematic ──► models/electrical (tw-electrical) ──► tw-num / tw-core
+
+tw-godot ──► tw-scene        (SimulationHost)
+         └─► tw-schematic    (SchematicHost)
 ```
 
 `tw-schematic` menyimpan dokumen yang bisa diedit (part, pin, wire, posisi,
@@ -129,9 +132,10 @@ Klien terminal mandiri. Tidak memiliki logika simulasi internal; semua pemuatan 
 ---
 
 ### D2. `crates/tw-godot` — Adapter GDExtension
-`cdylib` tipis yang mengekspos `tw-scene::Session` sebagai node Godot 4 bernama `SimulationHost`.
+`cdylib` tipis yang mengekspos `tw-scene::Session` sebagai node Godot 4 `SimulationHost` dan `tw-schematic::SchematicSession` sebagai node `SchematicHost`.
 
-* **Tanpa logika simulasi**: hanya memuat world, mengubah `delta` detik menjadi tick integer, memetakan `StateValue`/`Port`/`TraceNode` ke `Variant`, dan meneruskan stimulus.
+* **Tanpa logika simulasi/authoring**: hanya memuat world atau dokumen, mengubah `delta` detik menjadi tick integer, memetakan data engine ke `Variant`, dan meneruskan perintah edit/stimulus.
+* **SchematicHost**: katalog part, `add_part`/`move_part`/`set_param`, `connect_pins`/`disconnect_wire`, undo/redo, `snapshot()`, `diagnostics()`, `run_dc()`, dan `state_snapshot()`.
 * **Model pull**: GDScript memanggil `take_state_changes()` setiap frame; tidak ada pemanggilan balik ke GDScript dari dalam `#[func]` yang memegang borrow.
 * **Checkpoint JSON**: `checkpoint_json()` / `restore_json()` berbagi format dengan CLI.
 * **Project demo**: `godot/` berisi `project.godot`, skena demo, dan smoke test headless.
@@ -156,6 +160,7 @@ Dokumen rangkaian yang bisa diedit pemain. Lapisan ini **tidak memiliki fisika**
 * **Command & sesi ([`command.rs`](file:///home/rkcode/Projects/tech-world-engine/crates/tw-schematic/src/command.rs))**:
   - `Command` (`AddPart`, `RemovePart`, `MovePart`, `SetParam`, `RenamePart`, `Connect`, `Disconnect`) dengan undo/redo.
   - `SchematicSession` menyimpan cache compile dan state DC; setiap edit menaikkan `revision` dan membatalkan cache.
+* **Integrasi Godot**: `SchematicHost` di `tw-godot` meneruskan seluruh operasi ke sesi ini, dan `godot/scenes/schematic_editor.tscn` menyediakan editor 2D interaktif (palet part, drag, wiring, properti, diagnostik, dan `Run DC`).
 
 ---
 
