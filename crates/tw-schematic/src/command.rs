@@ -2,7 +2,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tw_electrical::CircuitState;
 
-use crate::compile::CompiledCircuit;
+use crate::chip::ChipRegistry;
+use crate::compile::{compile_with_registry, CompiledCircuit};
 use crate::document::{CircuitDocument, Part, PartId, PinRef, Point2, Wire, WireId};
 use crate::error::SchematicError;
 
@@ -99,6 +100,7 @@ pub struct SchematicSession {
     undo_stack: Vec<CircuitDocument>,
     redo_stack: Vec<CircuitDocument>,
     revision: u64,
+    registry: ChipRegistry,
 }
 
 impl SchematicSession {
@@ -110,7 +112,28 @@ impl SchematicSession {
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
             revision: 0,
+            registry: ChipRegistry::new(),
         }
+    }
+
+    pub fn with_registry(document: CircuitDocument, registry: ChipRegistry) -> Self {
+        Self {
+            document,
+            compiled: None,
+            state: None,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            revision: 0,
+            registry,
+        }
+    }
+
+    pub fn registry(&self) -> &ChipRegistry {
+        &self.registry
+    }
+
+    pub fn registry_mut(&mut self) -> &mut ChipRegistry {
+        &mut self.registry
     }
 
     pub fn document(&self) -> &CircuitDocument {
@@ -175,7 +198,7 @@ impl SchematicSession {
     /// Compile lazily and cache the result until the next edit.
     pub fn compile(&mut self) -> Result<&CompiledCircuit, SchematicError> {
         if self.compiled.is_none() {
-            self.compiled = Some(self.document.compile()?);
+            self.compiled = Some(compile_with_registry(&self.document, Some(&self.registry))?);
         }
         Ok(self.compiled.as_ref().expect("compiled was just set"))
     }
@@ -183,7 +206,7 @@ impl SchematicSession {
     /// Compile (if needed) and solve the DC operating point.
     pub fn run_dc(&mut self) -> Result<&CircuitState, SchematicError> {
         if self.compiled.is_none() {
-            self.compiled = Some(self.document.compile()?);
+            self.compiled = Some(compile_with_registry(&self.document, Some(&self.registry))?);
         }
         let state = self
             .compiled

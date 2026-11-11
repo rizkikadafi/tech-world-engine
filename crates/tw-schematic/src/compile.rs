@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use tw_electrical::{dc_op, Circuit, CircuitError, CircuitState, NodeId};
 
+use crate::chip::ChipRegistry;
 use crate::document::{CircuitDocument, Part, PartId, PartKind, PinRef};
 use crate::error::SchematicError;
 use crate::net::{self, NetId, NetMap};
@@ -55,6 +56,14 @@ impl CompiledCircuit {
 
 /// Compile a validated document into a `tw-electrical::Circuit`.
 pub fn compile(document: &CircuitDocument) -> Result<CompiledCircuit, SchematicError> {
+    compile_with_registry(document, None)
+}
+
+/// Compile a validated document into a `tw-electrical::Circuit` with a chip registry.
+pub fn compile_with_registry(
+    document: &CircuitDocument,
+    registry: Option<&ChipRegistry>,
+) -> Result<CompiledCircuit, SchematicError> {
     let errors: Vec<_> = document
         .validate()
         .into_iter()
@@ -93,7 +102,7 @@ pub fn compile(document: &CircuitDocument) -> Result<CompiledCircuit, SchematicE
 
     let mut probes = BTreeMap::new();
     for part in parts {
-        compile_part(part, &pin_nodes, &mut circuit, &mut probes)?;
+        compile_part(part, &pin_nodes, &mut circuit, &mut probes, registry)?;
     }
 
     Ok(CompiledCircuit {
@@ -110,6 +119,7 @@ fn compile_part(
     pin_nodes: &BTreeMap<PinRef, NodeId>,
     circuit: &mut Circuit,
     probes: &mut BTreeMap<PartId, NodeId>,
+    registry: Option<&ChipRegistry>,
 ) -> Result<(), SchematicError> {
     let node = |pin: &str| node_for(pin_nodes, part, pin);
 
@@ -202,9 +212,30 @@ fn compile_part(
                 resistance,
             );
         }
-        PartKind::Ground => {}
+        PartKind::Ground | PartKind::IoPin => {}
         PartKind::Probe => {
             probes.insert(part.id.clone(), node("node")?);
+        }
+        PartKind::Chip => {
+            let chip_name = part.str_param("chip_name", "");
+            let Some(reg) = registry else {
+                return Err(SchematicError::InvalidDocument(format!(
+                    "Cannot compile chip '{}': no chip registry provided",
+                    chip_name
+                )));
+            };
+            let chip = reg.get(chip_name).ok_or_else(|| {
+                SchematicError::InvalidDocument(format!("Unknown chip '{}'", chip_name))
+            })?;
+            let subcircuit = chip.to_subcircuit(Some(reg))?;
+            let mut bindings = Vec::new();
+            for pin in &chip.pins {
+                let pin_node = node(&pin.name)?;
+                bindings.push((pin.name.as_str(), pin_node));
+            }
+            subcircuit
+                .instantiate(circuit, &part.id.0, &bindings)
+                .map_err(SchematicError::Circuit)?;
         }
     }
 

@@ -1,8 +1,10 @@
 ; Engine configuration file.
-; Tech World Engine — Godot demo project.
+; It's best edited using the editor UI and not directly,
+; since the parameters that go here are not all obvious.
 ;
-; Requires the GDExtension build in addons/tw_godot/bin/.
-; See godot/README.md for build instructions.
+; Format:
+;   [section] ; section goes between []
+;   param=value ; assign values to parameters
 
 config_version=5
 

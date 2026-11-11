@@ -12,7 +12,8 @@ use tw_core::{
 };
 
 use crate::characterization::{
-    GateCharacterization, GateKind, LogicLevels, TimingMetrics, TruthTable,
+    GateCharacterization, GateKind, GenericCircuitCharacterization, LogicLevels, TimingMetrics,
+    TruthTable,
 };
 use crate::error::CircuitError;
 use crate::time_base::TimeBase;
@@ -647,6 +648,270 @@ impl Component for DerivedDff {
             self.id,
             self.id,
             EventPayload::Custom(DFF_MOUNT_EVENT.to_string()),
+        )]
+    }
+}
+
+// ---------------------------------------------------------------------------
+// DerivedCustomComponent (Multi-input, multi-output arbitrary circuit)
+// ---------------------------------------------------------------------------
+
+const CUSTOM_OUTPUT_EVENT_PREFIX: &str = "derived-custom-output:";
+const CUSTOM_MOUNT_EVENT: &str = "derived-custom-emit-initial";
+
+/// A discrete component whose multi-input, multi-output logic and timing were measured
+/// from an arbitrary physical transistor circuit.
+#[derive(Debug)]
+pub struct DerivedCustomComponent {
+    id: ComponentId,
+    name: String,
+    ports: Vec<Port>,
+    state: State,
+    characterization: GenericCircuitCharacterization,
+    time_base: TimeBase,
+    input_ports: Vec<PortId>,
+    output_ports: Vec<PortId>,
+    inputs: Vec<bool>,
+    outputs: Vec<bool>,
+    pending: Vec<bool>,
+    pending_outputs: Vec<bool>,
+    generations: Vec<u64>,
+    timings: Vec<TimingTicks>,
+}
+
+impl DerivedCustomComponent {
+    /// Builds a discrete component from an arbitrary measured characterization.
+    pub fn from_characterization(
+        id: ComponentId,
+        name: impl Into<String>,
+        characterization: GenericCircuitCharacterization,
+        time_base: TimeBase,
+    ) -> Result<Self, DerivedError> {
+        time_base
+            .validate()
+            .map_err(|err| DerivedError::InvalidTimeBase(err.to_string()))?;
+
+        let in_count = characterization.input_names.len();
+        let out_count = characterization.output_names.len();
+
+        let mut ports = Vec::with_capacity(in_count + out_count);
+        let mut input_ports = Vec::with_capacity(in_count);
+        let mut output_ports = Vec::with_capacity(out_count);
+
+        let mut port_id_counter = 1u64;
+
+        for in_name in &characterization.input_names {
+            let port_id = PortId(port_id_counter);
+            port_id_counter += 1;
+            ports.push(Port::new(port_id, in_name.clone(), PortDirection::Input));
+            input_ports.push(port_id);
+        }
+
+        for out_name in &characterization.output_names {
+            let port_id = PortId(port_id_counter);
+            port_id_counter += 1;
+            ports.push(Port::new(port_id, out_name.clone(), PortDirection::Output));
+            output_ports.push(port_id);
+        }
+
+        let inputs = vec![false; in_count];
+        let mut outputs = Vec::with_capacity(out_count);
+        let mut timings = Vec::with_capacity(out_count);
+
+        let mut state = State::new();
+
+        for in_name in &characterization.input_names {
+            state.set(in_name.as_str(), false);
+        }
+
+        for out_name in &characterization.output_names {
+            let single = characterization.outputs.get(out_name).ok_or_else(|| {
+                DerivedError::Circuit(CircuitError::InvalidElement(format!(
+                    "Missing characterization for output '{}'",
+                    out_name
+                )))
+            })?;
+            let val = single.truth_table.output_for(&inputs).unwrap_or(false);
+            let timing = TimingTicks::from_metrics(&single.timing, time_base);
+            outputs.push(val);
+            timings.push(timing);
+            state.set(out_name.as_str(), val);
+            state.set(format!("{}_delay_t_pHL", out_name), timing.t_pHL);
+            state.set(format!("{}_delay_t_pLH", out_name), timing.t_pLH);
+        }
+
+        let pending = vec![false; out_count];
+        let pending_outputs = outputs.clone();
+        let generations = vec![0u64; out_count];
+
+        Ok(Self {
+            id,
+            name: name.into(),
+            ports,
+            state,
+            characterization,
+            time_base,
+            input_ports,
+            output_ports,
+            inputs,
+            outputs,
+            pending,
+            pending_outputs,
+            generations,
+            timings,
+        })
+    }
+
+    /// Characterization data backing this component.
+    pub fn characterization(&self) -> &GenericCircuitCharacterization {
+        &self.characterization
+    }
+
+    /// Time base used for quantization.
+    pub fn time_base(&self) -> TimeBase {
+        self.time_base
+    }
+}
+
+impl Component for DerivedCustomComponent {
+    fn id(&self) -> ComponentId {
+        self.id
+    }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn ports(&self) -> &[Port] {
+        &self.ports
+    }
+
+    fn state(&self) -> &State {
+        &self.state
+    }
+
+    fn handle_event(&mut self, event: &Event, _ctx: &mut SimulationContext) -> Vec<Event> {
+        match &event.payload {
+            EventPayload::PortSignal { port_id, value } => {
+                let Some(in_idx) = self.input_ports.iter().position(|id| id == port_id) else {
+                    return Vec::new();
+                };
+                let Some(new_val) = value.as_bool() else {
+                    return Vec::new();
+                };
+                if self.inputs[in_idx] == new_val {
+                    return Vec::new();
+                }
+
+                self.inputs[in_idx] = new_val;
+                let in_name = &self.characterization.input_names[in_idx];
+                self.state.set(in_name.as_str(), new_val);
+
+                let mut scheduled = Vec::new();
+
+                for (out_idx, out_name) in self.characterization.output_names.iter().enumerate() {
+                    let single = match self.characterization.outputs.get(out_name) {
+                        Some(s) => s,
+                        None => continue,
+                    };
+                    let desired = match single.truth_table.output_for(&self.inputs) {
+                        Some(d) => d,
+                        None => continue,
+                    };
+
+                    if desired == self.outputs[out_idx] {
+                        if self.pending[out_idx] {
+                            self.generations[out_idx] =
+                                self.generations[out_idx].wrapping_add(1);
+                            self.pending[out_idx] = false;
+                        }
+                    } else {
+                        self.generations[out_idx] = self.generations[out_idx].wrapping_add(1);
+                        self.pending[out_idx] = true;
+                        self.pending_outputs[out_idx] = desired;
+                        let delay = self.timings[out_idx].delay_for(desired);
+
+                        let at = SimulationTime::new(event.time.ticks() + delay);
+                        let gen = self.generations[out_idx];
+                        scheduled.push(Event::at(
+                            at,
+                            self.id,
+                            self.id,
+                            EventPayload::Custom(format!(
+                                "{}{}:{}:{}",
+                                CUSTOM_OUTPUT_EVENT_PREFIX, self.id.0, out_idx, gen
+                            )),
+                        ));
+                    }
+                }
+
+                scheduled
+            }
+            EventPayload::Custom(payload) if payload == CUSTOM_MOUNT_EVENT => {
+                let mut events = Vec::with_capacity(self.output_ports.len());
+                for (out_idx, &port_id) in self.output_ports.iter().enumerate() {
+                    events.push(Event::at(
+                        event.time,
+                        self.id,
+                        self.id,
+                        EventPayload::PortSignal {
+                            port_id,
+                            value: StateValue::Bool(self.outputs[out_idx]),
+                        },
+                    ));
+                }
+                events
+            }
+            EventPayload::Custom(payload) => {
+                let Some(rest) = payload.strip_prefix(CUSTOM_OUTPUT_EVENT_PREFIX) else {
+                    return Vec::new();
+                };
+                let parts: Vec<&str> = rest.split(':').collect();
+                if parts.len() != 3 {
+                    return Vec::new();
+                }
+                let Ok(comp_id) = parts[0].parse::<u64>() else {
+                    return Vec::new();
+                };
+                let Ok(out_idx) = parts[1].parse::<usize>() else {
+                    return Vec::new();
+                };
+                let Ok(gen) = parts[2].parse::<u64>() else {
+                    return Vec::new();
+                };
+
+                if comp_id != self.id.0 || out_idx >= self.outputs.len() {
+                    return Vec::new();
+                }
+                if !self.pending[out_idx] || gen != self.generations[out_idx] {
+                    return Vec::new();
+                }
+
+                self.outputs[out_idx] = self.pending_outputs[out_idx];
+                self.pending[out_idx] = false;
+                let out_name = &self.characterization.output_names[out_idx];
+                self.state.set(out_name.as_str(), self.outputs[out_idx]);
+
+                vec![Event::at(
+                    event.time,
+                    self.id,
+                    self.id,
+                    EventPayload::PortSignal {
+                        port_id: self.output_ports[out_idx],
+                        value: StateValue::Bool(self.outputs[out_idx]),
+                    },
+                )]
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    fn on_mount(&mut self, ctx: &mut SimulationContext) -> Vec<Event> {
+        vec![Event::at(
+            ctx.time(),
+            self.id,
+            self.id,
+            EventPayload::Custom(CUSTOM_MOUNT_EVENT.to_string()),
         )]
     }
 }

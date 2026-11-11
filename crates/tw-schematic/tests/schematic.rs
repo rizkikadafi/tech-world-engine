@@ -389,3 +389,98 @@ fn invalid_parameter_is_reported_before_compilation() {
     );
     assert!(document.compile().is_err());
 }
+
+#[test]
+fn chip_pack_and_hierarchical_instantiate() {
+    use tw_schematic::{ChipDefinition, ChipPin, ChipRegistry, PinDirection, PinSide};
+
+    // 1. Build an Inverter subcircuit document
+    let mut inv_doc = CircuitDocument::new("inverter-inner");
+    inv_doc.add_part(part("mp", PartKind::Pmos)).unwrap();
+    inv_doc.add_part(part("mn", PartKind::Nmos)).unwrap();
+    inv_doc.add_part(part("gnd", PartKind::Ground)).unwrap();
+    inv_doc
+        .add_part(part("pin_in", PartKind::IoPin).with_param("name", "in"))
+        .unwrap();
+    inv_doc
+        .add_part(part("pin_out", PartKind::IoPin).with_param("name", "out"))
+        .unwrap();
+    inv_doc
+        .add_part(part("pin_vdd", PartKind::IoPin).with_param("name", "vdd"))
+        .unwrap();
+
+    // Wiring internal inverter
+    connect(&mut inv_doc, "pin_in", "pin", "mp", "gate");
+    connect(&mut inv_doc, "pin_in", "pin", "mn", "gate");
+    connect(&mut inv_doc, "mp", "source", "pin_vdd", "pin");
+    connect(&mut inv_doc, "mn", "source", "gnd", "gnd");
+    connect(&mut inv_doc, "mp", "drain", "pin_out", "pin");
+    connect(&mut inv_doc, "mn", "drain", "pin_out", "pin");
+
+    let pins = vec![
+        ChipPin::new("in", PinDirection::Input, PinSide::Left),
+        ChipPin::new("out", PinDirection::Output, PinSide::Right),
+        ChipPin::new("vdd", PinDirection::Power, PinSide::Top),
+    ];
+    let chip_def = ChipDefinition::new("cmos_inv", pins, inv_doc);
+
+    let mut registry = ChipRegistry::new();
+    registry.register(chip_def);
+
+    // 2. Build outer document that instantiates two inverters in series
+    let mut outer = CircuitDocument::new("double-inverter");
+    outer
+        .add_part(part("v_supply", PartKind::VoltageSource).with_param("voltage", 5.0))
+        .unwrap();
+    outer.add_part(part("gnd", PartKind::Ground)).unwrap();
+
+    let chip_pins_val = serde_json::json!(["in", "out", "vdd"]);
+    outer
+        .add_part(
+            part("inv1", PartKind::Chip)
+                .with_param("chip_name", "cmos_inv")
+                .with_param("chip_pins", chip_pins_val.clone()),
+        )
+        .unwrap();
+    outer
+        .add_part(
+            part("inv2", PartKind::Chip)
+                .with_param("chip_name", "cmos_inv")
+                .with_param("chip_pins", chip_pins_val),
+        )
+        .unwrap();
+    outer.add_part(part("pr_mid", PartKind::Probe)).unwrap();
+    outer.add_part(part("pr_out", PartKind::Probe)).unwrap();
+
+    // Connect supply & ground
+    connect(&mut outer, "v_supply", "pos", "inv1", "vdd");
+    connect(&mut outer, "inv1", "vdd", "inv2", "vdd");
+    connect(&mut outer, "v_supply", "neg", "gnd", "gnd");
+
+    // Input to inv1 is 0 (GND)
+    connect(&mut outer, "inv1", "in", "gnd", "gnd");
+
+    // Output of inv1 -> Input of inv2
+    connect(&mut outer, "inv1", "out", "inv2", "in");
+    connect(&mut outer, "inv1", "out", "pr_mid", "node");
+
+    // Output of inv2 -> pr_out
+    connect(&mut outer, "inv2", "out", "pr_out", "node");
+
+    let mut session = SchematicSession::with_registry(outer, registry);
+    let compiled = session.compile().expect("compilation succeeds").clone();
+    let state = session.run_dc().expect("dc operating point succeeds");
+
+    let v_mid = compiled.probe_voltage(state, "pr_mid").unwrap();
+    let v_out = compiled.probe_voltage(state, "pr_out").unwrap();
+
+    // With input 0V: inv1 output should be HIGH (~5.0V), inv2 output should be LOW (~0.0V)
+    assert!(
+        (v_mid - 5.0).abs() < 0.1,
+        "expected mid voltage ~5.0V, got {v_mid}"
+    );
+    assert!(
+        v_out.abs() < 0.1,
+        "expected out voltage ~0.0V, got {v_out}"
+    );
+}

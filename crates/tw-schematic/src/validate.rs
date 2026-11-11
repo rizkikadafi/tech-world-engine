@@ -107,7 +107,7 @@ fn check_pin_ref(
             }
             diagnostics.push(diagnostic);
         }
-        Some(part) if !part.kind.has_pin(&pin.pin) => {
+        Some(part) if !part.has_pin(&pin.pin) => {
             let mut diagnostic = Diagnostic::error(
                 "unknown_pin",
                 format!(
@@ -165,7 +165,7 @@ fn validate_parameters(document: &CircuitDocument, diagnostics: &mut Vec<Diagnos
                     }
                 }
             }
-            PartKind::Ground | PartKind::Diode | PartKind::Probe => {}
+            PartKind::Ground | PartKind::Diode | PartKind::Probe | PartKind::IoPin | PartKind::Chip => {}
         }
     }
 }
@@ -269,15 +269,15 @@ fn validate_nets(
     }
 
     for part in document.parts() {
-        for definition in part.kind.pins() {
-            let pin = PinRef::new(part.id.clone(), definition.name);
+        for pin_name in part.pin_names() {
+            let pin = PinRef::new(part.id.clone(), pin_name.clone());
             if !used_pins.contains(&pin) {
                 diagnostics.push(
                     Diagnostic::warning(
                         "dangling_pin",
                         format!(
                             "pin '{}' on part '{}' is not connected",
-                            definition.name, part.id
+                            pin_name, part.id
                         ),
                     )
                     .with_part(part.id.clone()),

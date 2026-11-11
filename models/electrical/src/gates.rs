@@ -8,13 +8,15 @@
 //! - CMOS AND (2-input, compound NAND + NOT)
 //! - CMOS OR (2-input, compound NOR + NOT)
 
+use serde::{Deserialize, Serialize};
+
 use crate::circuit::Circuit;
 use crate::error::CircuitError;
 use crate::node::NodeId;
 use crate::subcircuit::Subcircuit;
 
 /// Physical and electrical configuration for CMOS logic gates.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct CmosGateConfig {
     /// Transistor threshold voltage |Vth| (V)
     pub vth: f64,

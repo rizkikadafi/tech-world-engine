@@ -8,8 +8,10 @@ use godot::classes::INode;
 use godot::global::Error;
 use godot::prelude::*;
 use serde_json::{Map, Value};
+use tw_electrical::Characterizer;
 use tw_schematic::{
-    CircuitDocument, Command, Part, PartKind, PinRef, Point2, SchematicSession, WireId,
+    ChipDefinition, ChipPin, ChipRegistry, CircuitDocument, Command, Part, PartKind, PinDirection,
+    PinRef, PinSide, Point2, SchematicSession, WireId,
 };
 
 use crate::schematic_convert::{
@@ -27,6 +29,7 @@ use crate::{is_godot_path, read_godot_text, write_godot_text};
 pub struct SchematicHost {
     base: Base<Node>,
     session: Option<SchematicSession>,
+    registry: ChipRegistry,
 }
 
 #[godot_api]
@@ -35,6 +38,7 @@ impl INode for SchematicHost {
         Self {
             base,
             session: None,
+            registry: ChipRegistry::new(),
         }
     }
 }
@@ -51,7 +55,10 @@ impl SchematicHost {
         } else {
             name.to_string()
         };
-        self.session = Some(SchematicSession::new(CircuitDocument::new(name)));
+        self.session = Some(SchematicSession::with_registry(
+            CircuitDocument::new(name),
+            self.registry.clone(),
+        ));
         Error::OK
     }
 
@@ -114,7 +121,10 @@ impl SchematicHost {
     fn load_document_json(&mut self, json: GString) -> Error {
         match CircuitDocument::from_json_str(&json.to_string()) {
             Ok(document) => {
-                self.session = Some(SchematicSession::new(document));
+                self.session = Some(SchematicSession::with_registry(
+                    document,
+                    self.registry.clone(),
+                ));
                 Error::OK
             }
             Err(error) => {
@@ -139,7 +149,10 @@ impl SchematicHost {
 
         match result {
             Ok(document) => {
-                self.session = Some(SchematicSession::new(document));
+                self.session = Some(SchematicSession::with_registry(
+                    document,
+                    self.registry.clone(),
+                ));
                 Error::OK
             }
             Err(message) => {
@@ -416,8 +429,8 @@ impl SchematicHost {
             entry.set("label", part.label.as_deref().unwrap_or(""));
 
             let mut pins = Array::<GString>::new();
-            for pin in part.kind.pins() {
-                pins.push(&GString::from(pin.name));
+            for pin_name in part.pin_names() {
+                pins.push(&GString::from(pin_name.as_str()));
             }
             entry.set("pins", &pins);
 
@@ -533,6 +546,290 @@ impl SchematicHost {
         result.set("nets", &nets);
 
         result
+    }
+
+    // --- Chip packaging & abstraction --------------------------------------
+
+    /// Pack the currently active document into a reusable chip, characterizing its
+    /// electrical behavior from real transistor simulation.
+    #[func]
+    fn pack_chip(
+        &mut self,
+        name: GString,
+        category: GString,
+        package_type: GString,
+        save_path: GString,
+    ) -> VarDictionary {
+        let mut result = VarDictionary::new();
+        let Some(session) = self.session.as_mut() else {
+            result.set("error", "No document is loaded");
+            return result;
+        };
+
+        let chip_name = name.to_string();
+        if chip_name.trim().is_empty() {
+            result.set("error", "Chip name cannot be empty");
+            return result;
+        }
+
+        let compiled = match session.compile() {
+            Ok(c) => c.clone(),
+            Err(e) => {
+                result.set("error", format!("Compilation error: {}", e).as_str());
+                return result;
+            }
+        };
+
+        let mut chip_pins = Vec::new();
+        let mut input_nodes = Vec::new();
+        let mut input_names = Vec::new();
+        let mut output_nodes = Vec::new();
+        let mut output_names = Vec::new();
+        let mut supply_node = None;
+
+        for part in session.document().parts() {
+            if part.kind == PartKind::IoPin {
+                let default_name = part.label.clone().unwrap_or_else(|| part.id.0.clone());
+                let p_name = part.str_param("name", &default_name).to_string();
+                let dir_str = part.str_param("direction", "input");
+
+                let pin_ref = PinRef::new(part.id.clone(), "pin");
+                let node_id = match compiled.pin_node(&pin_ref) {
+                    Some(n) => n,
+                    None => continue,
+                };
+                let c_node_name = match compiled.circuit.node_name(node_id) {
+                    Some(s) => s.to_string(),
+                    None => continue,
+                };
+
+                match dir_str {
+                    "input" => {
+                        chip_pins.push(ChipPin::new(p_name.clone(), PinDirection::Input, PinSide::Left));
+                        input_nodes.push(c_node_name);
+                        input_names.push(p_name);
+                    }
+                    "output" => {
+                        chip_pins.push(ChipPin::new(p_name.clone(), PinDirection::Output, PinSide::Right));
+                        output_nodes.push(c_node_name);
+                        output_names.push(p_name);
+                    }
+                    "power" => {
+                        chip_pins.push(ChipPin::new(p_name.clone(), PinDirection::Power, PinSide::Top));
+                        supply_node = Some(c_node_name);
+                    }
+                    "ground" => {
+                        chip_pins.push(ChipPin::new(p_name.clone(), PinDirection::Ground, PinSide::Bottom));
+                    }
+                    _ => {
+                        chip_pins.push(ChipPin::new(p_name.clone(), PinDirection::Inout, PinSide::Left));
+                    }
+                }
+            }
+        }
+
+        if chip_pins.is_empty() {
+            result.set("error", "No IO Pins found in document. Place IO Pins to define the chip interface.");
+            return result;
+        }
+
+        let characterizer = Characterizer::with_defaults();
+        let mut characterization = None;
+
+        if !input_nodes.is_empty() && !output_nodes.is_empty() {
+            if let Ok(mut char_res) = characterizer.characterize_generic_circuit(
+                &compiled.circuit,
+                &input_nodes,
+                &output_nodes,
+                supply_node.as_deref(),
+            ) {
+                char_res.input_names = input_names.clone();
+                char_res.output_names = output_names.clone();
+                let mut remapped_outputs = std::collections::HashMap::new();
+                for (c_node, user_out) in output_nodes.iter().zip(output_names.iter()) {
+                    if let Some(single) = char_res.outputs.remove(c_node) {
+                        remapped_outputs.insert(
+                            user_out.clone(),
+                            tw_electrical::SingleOutputCharacterization {
+                                output_name: user_out.clone(),
+                                ..single
+                            },
+                        );
+                    }
+                }
+                char_res.outputs = remapped_outputs;
+                characterization = Some(char_res);
+            }
+        }
+
+        let cat = if category.is_empty() {
+            "Custom".to_string()
+        } else {
+            category.to_string()
+        };
+
+        let pkg = if package_type.is_empty() {
+            "DIP-8".to_string()
+        } else {
+            package_type.to_string()
+        };
+
+        let mut chip_def = ChipDefinition::new(
+            chip_name.clone(),
+            chip_pins.clone(),
+            session.document().clone(),
+        );
+        chip_def.category = cat;
+        chip_def.package_3d.package_type = pkg;
+        chip_def.characterization = characterization.clone();
+
+        self.registry.register(chip_def.clone());
+        session.registry_mut().register(chip_def.clone());
+
+        let path_str = save_path.to_string();
+        if !path_str.trim().is_empty() {
+            if let Ok(json) = chip_def.to_json_string() {
+                let write_res = if is_godot_path(&path_str) {
+                    write_godot_text(&path_str, &json)
+                } else {
+                    std::fs::write(&path_str, json).map_err(|e| e.to_string())
+                };
+                if let Err(e) = write_res {
+                    godot_error!("Failed to save chip file '{}': {}", path_str, e);
+                }
+            }
+        }
+
+        result.set("success", true);
+        result.set("name", chip_name.as_str());
+
+        let mut pins_arr = Array::<VarDictionary>::new();
+        for p in &chip_pins {
+            let mut pd = VarDictionary::new();
+            pd.set("name", p.name.as_str());
+            pd.set("direction", format!("{:?}", p.direction).to_lowercase().as_str());
+            pd.set("side", format!("{:?}", p.side).to_lowercase().as_str());
+            pins_arr.push(&pd);
+        }
+        result.set("pins", &pins_arr);
+
+        if let Some(char_data) = &characterization {
+            let mut tt_dict = VarDictionary::new();
+            let mut timings_dict = VarDictionary::new();
+            for (out_name, single) in &char_data.outputs {
+                let mut row_arr = Array::<bool>::new();
+                for &b in &single.truth_table.outputs {
+                    row_arr.push(b);
+                }
+                tt_dict.set(out_name.as_str(), &row_arr);
+
+                let mut tm = VarDictionary::new();
+                tm.set("t_pHL", single.timing.t_pHL);
+                tm.set("t_pLH", single.timing.t_pLH);
+                tm.set("t_rise", single.timing.t_rise);
+                tm.set("t_fall", single.timing.t_fall);
+                timings_dict.set(out_name.as_str(), &tm);
+            }
+            result.set("truth_tables", &tt_dict);
+            result.set("timings", &timings_dict);
+        }
+
+        result
+    }
+
+    #[func]
+    fn add_chip_part(&mut self, id: GString, chip_name: GString, x: f64, y: f64) -> Error {
+        let Some(session) = self.session.as_mut() else {
+            return Error::FAILED;
+        };
+        let c_name = chip_name.to_string();
+        let pin_names: Vec<String> = if let Some(chip) = self.registry.get(&c_name) {
+            chip.pins.iter().map(|p| p.name.clone()).collect()
+        } else {
+            godot_error!("add_chip_part: unknown chip '{}'", c_name);
+            return Error::ERR_INVALID_PARAMETER;
+        };
+
+        let mut part = Part::new(id.to_string(), PartKind::Chip, Point2::new(x, y));
+        part.params.insert("chip_name".to_string(), Value::from(c_name));
+        part.params.insert(
+            "chip_pins".to_string(),
+            Value::Array(pin_names.into_iter().map(Value::from).collect()),
+        );
+
+        apply_command(session, &Command::AddPart { part })
+    }
+
+    #[func]
+    fn load_chip(&mut self, path: GString) -> Error {
+        let Some(session) = self.session.as_mut() else {
+            return Error::FAILED;
+        };
+        let path_str = path.to_string();
+        let json_str = if is_godot_path(&path_str) {
+            match read_godot_text(&path_str) {
+                Ok(s) => s,
+                Err(e) => {
+                    godot_error!("load_chip read error: {}", e);
+                    return Error::FAILED;
+                }
+            }
+        } else {
+            match std::fs::read_to_string(&path_str) {
+                Ok(s) => s,
+                Err(e) => {
+                    godot_error!("load_chip read error: {}", e);
+                    return Error::FAILED;
+                }
+            }
+        };
+
+        match ChipDefinition::from_json_str(&json_str) {
+            Ok(chip) => {
+                self.registry.register(chip.clone());
+                session.registry_mut().register(chip);
+                Error::OK
+            }
+            Err(e) => {
+                godot_error!("load_chip parse error: {}", e);
+                Error::FAILED
+            }
+        }
+    }
+
+    #[func]
+    fn list_chips(&self) -> Array<VarDictionary> {
+        let mut list = Array::<VarDictionary>::new();
+        for chip in self.registry.all() {
+            let mut dict = VarDictionary::new();
+            dict.set("name", chip.name.as_str());
+            dict.set("category", chip.category.as_str());
+            dict.set("description", chip.description.as_str());
+            dict.set("package_type", chip.package_3d.package_type.as_str());
+
+            let mut pins = Array::<VarDictionary>::new();
+            for p in &chip.pins {
+                let mut pd = VarDictionary::new();
+                pd.set("name", p.name.as_str());
+                pd.set("direction", format!("{:?}", p.direction).to_lowercase().as_str());
+                pd.set("side", format!("{:?}", p.side).to_lowercase().as_str());
+                pins.push(&pd);
+            }
+            dict.set("pins", &pins);
+            list.push(&dict);
+        }
+        list
+    }
+
+    #[func]
+    fn get_chip_schematic_json(&self, chip_name: GString) -> GString {
+        let c_name = chip_name.to_string();
+        if let Some(chip) = self.registry.get(&c_name) {
+            if let Ok(json) = chip.internal_schematic.to_json_string() {
+                return GString::from(json.as_str());
+            }
+        }
+        GString::from("")
     }
 }
 

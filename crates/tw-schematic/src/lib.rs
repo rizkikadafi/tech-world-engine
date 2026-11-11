@@ -18,6 +18,7 @@
 //! assert_eq!(doc.parts().len(), 1);
 //! ```
 
+pub mod chip;
 pub mod command;
 pub mod compile;
 pub mod diagnostics;
@@ -26,8 +27,9 @@ pub mod error;
 pub mod net;
 pub mod validate;
 
+pub use chip::{ChipDefinition, ChipPin, ChipRegistry, Package3DMetadata, PinDirection, PinSide};
 pub use command::{Command, SchematicSession};
-pub use compile::CompiledCircuit;
+pub use compile::{compile_with_registry, CompiledCircuit};
 pub use diagnostics::{Diagnostic, Severity};
 pub use document::{
     CircuitDocument, Part, PartId, PartKind, PinDefinition, PinRef, PinRole, Point2, Wire, WireId,

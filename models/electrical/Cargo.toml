@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 tw-core = { path = "../../crates/tw-core" }
 tw-num = { path = "../../crates/tw-num" }
+serde = { version = "1.0", features = ["derive"] }
 thiserror = "2"
 log = "0.4"
 

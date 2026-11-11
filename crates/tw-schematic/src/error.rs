@@ -41,6 +41,9 @@ pub enum SchematicError {
 
     #[error("unsupported document version {found} (maximum supported is {max})")]
     UnsupportedVersion { found: u32, max: u32 },
+
+    #[error("invalid document: {0}")]
+    InvalidDocument(String),
 }
 
 impl SchematicError {

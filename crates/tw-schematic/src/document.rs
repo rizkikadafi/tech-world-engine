@@ -166,6 +166,8 @@ pub enum PartKind {
     Lamp,
     Switch,
     Probe,
+    IoPin,
+    Chip,
 }
 
 const TWO_TERMINAL_PINS: &[PinDefinition] = &[
@@ -226,8 +228,15 @@ const PROBE_PINS: &[PinDefinition] = &[PinDefinition {
     role: PinRole::Signal,
 }];
 
+const IO_PIN_PINS: &[PinDefinition] = &[PinDefinition {
+    name: "pin",
+    role: PinRole::Signal,
+}];
+
+const CHIP_FALLBACK_PINS: &[PinDefinition] = &[];
+
 impl PartKind {
-    pub const ALL: [PartKind; 11] = [
+    pub const ALL: [PartKind; 13] = [
         PartKind::Resistor,
         PartKind::Capacitor,
         PartKind::VoltageSource,
@@ -239,6 +248,8 @@ impl PartKind {
         PartKind::Lamp,
         PartKind::Switch,
         PartKind::Probe,
+        PartKind::IoPin,
+        PartKind::Chip,
     ];
 
     /// Stable JSON/ID string for this kind.
@@ -255,6 +266,8 @@ impl PartKind {
             PartKind::Lamp => "lamp",
             PartKind::Switch => "switch",
             PartKind::Probe => "probe",
+            PartKind::IoPin => "io_pin",
+            PartKind::Chip => "chip",
         }
     }
 
@@ -294,6 +307,13 @@ impl PartKind {
                 params.insert("vth".to_string(), Value::from(0.8));
                 params.insert("beta".to_string(), Value::from(1e-3));
             }
+            PartKind::IoPin => {
+                params.insert("name".to_string(), Value::from("pin1"));
+                params.insert("direction".to_string(), Value::from("input"));
+            }
+            PartKind::Chip => {
+                params.insert("chip_name".to_string(), Value::from(""));
+            }
             PartKind::Ground | PartKind::Diode | PartKind::Probe => {}
         }
         params
@@ -313,6 +333,8 @@ impl PartKind {
             PartKind::Lamp => "Lamp",
             PartKind::Switch => "Switch",
             PartKind::Probe => "Probe",
+            PartKind::IoPin => "IO Pin",
+            PartKind::Chip => "Chip",
         }
     }
 
@@ -327,6 +349,8 @@ impl PartKind {
             PartKind::Diode => DIODE_PINS,
             PartKind::Nmos | PartKind::Pmos => MOSFET_PINS,
             PartKind::Probe => PROBE_PINS,
+            PartKind::IoPin => IO_PIN_PINS,
+            PartKind::Chip => CHIP_FALLBACK_PINS,
         }
     }
 
@@ -360,10 +384,15 @@ pub struct Part {
 
 impl Part {
     pub fn new(id: impl Into<PartId>, kind: PartKind, position: Point2) -> Self {
+        let id = id.into();
+        let mut params = kind.default_params();
+        if kind == PartKind::IoPin {
+            params.insert("name".to_string(), Value::from(id.0.clone()));
+        }
         Self {
-            id: id.into(),
+            id,
             kind,
-            params: kind.default_params(),
+            params,
             position,
             rotation: 0.0,
             label: None,
@@ -396,6 +425,34 @@ impl Part {
             .get(key)
             .and_then(Value::as_bool)
             .unwrap_or(default)
+    }
+
+    pub fn str_param<'a>(&'a self, key: &str, default: &'a str) -> &'a str {
+        self.params
+            .get(key)
+            .and_then(Value::as_str)
+            .unwrap_or(default)
+    }
+
+    /// Pin names exposed by this part, taking dynamic custom chip pins into account.
+    pub fn pin_names(&self) -> Vec<String> {
+        if self.kind == PartKind::Chip {
+            if let Some(pins) = self.params.get("chip_pins").and_then(|v| v.as_array()) {
+                let result: Vec<String> = pins
+                    .iter()
+                    .filter_map(|p| p.as_str().map(|s| s.to_string()))
+                    .collect();
+                if !result.is_empty() {
+                    return result;
+                }
+            }
+        }
+        self.kind.pins().iter().map(|p| p.name.to_string()).collect()
+    }
+
+    /// Whether this part has a pin with the given name.
+    pub fn has_pin(&self, name: &str) -> bool {
+        self.pin_names().iter().any(|pin| pin == name)
     }
 }
 
@@ -598,7 +655,7 @@ impl CircuitDocument {
     fn ensure_pin_exists(&self, pin: &PinRef) -> Result<(), SchematicError> {
         match self.parts.iter().find(|part| part.id == pin.part) {
             None => Err(SchematicError::UnknownPart(pin.part.clone())),
-            Some(part) if !part.kind.has_pin(&pin.pin) => Err(SchematicError::UnknownPin {
+            Some(part) if !part.has_pin(&pin.pin) => Err(SchematicError::UnknownPin {
                 part: part.id.clone(),
                 pin: pin.pin.clone(),
             }),

@@ -40,6 +40,7 @@ const PIN_OFFSETS := {
 		"source": Vector2(0, 44),
 	},
 	"probe": {"node": Vector2(0, 0)},
+	"io_pin": {"pin": Vector2(32, 0)},
 }
 
 var _snapshot: Dictionary = {}
@@ -52,6 +53,7 @@ var _show_voltages: bool = true
 var _selected_part: String = ""
 var _selected_wire: String = ""
 var _pending_kind: String = ""
+var _pending_chip_name: String = ""
 var _wire_start: Dictionary = {}
 var _drag_part: String = ""
 var _drag_offset: Vector2 = Vector2.ZERO
@@ -66,6 +68,9 @@ var _props_box: VBoxContainer
 var _diagnostics_list: ItemList
 var _undo_button: Button
 var _redo_button: Button
+var _pack_dialog: ConfirmationDialog
+var _pack_name_edit: LineEdit
+var _pack_package_opt: OptionButton
 
 @onready var host: SchematicHost = $SchematicHost
 
@@ -103,6 +108,7 @@ func _build_ui() -> void:
 	_make_button(top_row, "New", _on_new)
 	_make_button(top_row, "Load", _on_load)
 	_make_button(top_row, "Save", _on_save)
+	_make_button(top_row, "Pack Chip", _on_open_pack_dialog)
 	_make_button(top_row, "Sim demo", _on_open_demo)
 
 	_path_edit = LineEdit.new()
@@ -157,6 +163,36 @@ func _build_ui() -> void:
 	_diagnostics_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	bottom_box.add_child(_diagnostics_list)
 
+	_pack_dialog = ConfirmationDialog.new()
+	_pack_dialog.title = "Pack as Custom Chip"
+	layer.add_child(_pack_dialog)
+
+	var dbox := VBoxContainer.new()
+	dbox.custom_minimum_size = Vector2(280, 100)
+	_pack_dialog.add_child(dbox)
+
+	var lbl1 := Label.new()
+	lbl1.text = "Chip Name:"
+	dbox.add_child(lbl1)
+
+	_pack_name_edit = LineEdit.new()
+	_pack_name_edit.placeholder_text = "e.g. NAND2, Inverter, ALU"
+	dbox.add_child(_pack_name_edit)
+
+	var lbl2 := Label.new()
+	lbl2.text = "Package Type (3D):"
+	dbox.add_child(lbl2)
+
+	_pack_package_opt = OptionButton.new()
+	_pack_package_opt.add_item("DIP-4")
+	_pack_package_opt.add_item("DIP-8")
+	_pack_package_opt.add_item("DIP-14")
+	_pack_package_opt.add_item("DIP-16")
+	_pack_package_opt.select(1)
+	dbox.add_child(_pack_package_opt)
+
+	_pack_dialog.confirmed.connect(_on_confirm_pack)
+
 
 func _make_panel(
 	parent: Control,
@@ -206,14 +242,33 @@ func _populate_palette() -> void:
 	_palette_box.add_child(hint)
 
 	for kind in host.part_kinds():
+		var kid := String(kind["id"])
+		if kid == "chip":
+			continue
 		var button := Button.new()
 		button.text = String(kind["name"])
 		var pin_names := PackedStringArray()
 		for pin in kind["pins"]:
 			pin_names.append(String(pin["name"]))
-		button.tooltip_text = "%s\npins: %s" % [String(kind["id"]), ", ".join(pin_names)]
-		button.pressed.connect(_select_kind.bind(String(kind["id"])))
+		button.tooltip_text = "%s\npins: %s" % [kid, ", ".join(pin_names)]
+		button.pressed.connect(_select_kind.bind(kid))
 		_palette_box.add_child(button)
+
+	var chips := host.list_chips()
+	if not chips.is_empty():
+		var chip_title := Label.new()
+		chip_title.text = "Custom Chips"
+		_palette_box.add_child(chip_title)
+		for chip in chips:
+			var c_name := String(chip["name"])
+			var button := Button.new()
+			button.text = "IC: %s" % c_name
+			var pins_desc := []
+			for p in chip["pins"]:
+				pins_desc.append(String(p["name"]))
+			button.tooltip_text = "Chip: %s\npins: %s" % [c_name, ", ".join(pins_desc)]
+			button.pressed.connect(_select_custom_chip.bind(c_name))
+			_palette_box.add_child(button)
 
 
 # ---------------------------------------------------------------------------
@@ -283,6 +338,7 @@ func _clear_transient() -> void:
 
 func _select_kind(kind_id: String) -> void:
 	_pending_kind = kind_id
+	_pending_chip_name = ""
 	_wire_start = {}
 	_selected_part = ""
 	_selected_wire = ""
@@ -291,16 +347,34 @@ func _select_kind(kind_id: String) -> void:
 	queue_redraw()
 
 
+func _select_custom_chip(chip_name: String) -> void:
+	_pending_kind = "chip"
+	_pending_chip_name = chip_name
+	_wire_start = {}
+	_selected_part = ""
+	_selected_wire = ""
+	_status_label.text = "Placing custom chip '%s' — click the canvas (right-click to cancel)" % chip_name
+	_rebuild_props()
+	queue_redraw()
+
+
 func _place_part(pos: Vector2) -> void:
 	var kind := _pending_kind
 	var id := _next_part_id(kind)
-	if host.add_part(id, kind, pos.x, pos.y) != OK:
+	var err: int = OK
+	if kind == "chip" and _pending_chip_name != "":
+		err = host.add_chip_part(id, _pending_chip_name, pos.x, pos.y)
+	else:
+		err = host.add_part(id, kind, pos.x, pos.y)
+
+	if err != OK:
 		_status_label.text = "Add part failed (see console)"
 		_rebuild_diagnostics()
 		return
 	_selected_part = id
 	_selected_wire = ""
 	_pending_kind = ""
+	_pending_chip_name = ""
 	_refresh_all()
 
 
@@ -428,6 +502,7 @@ func _delete_selection() -> void:
 
 func _cancel_pending() -> void:
 	_pending_kind = ""
+	_pending_chip_name = ""
 	_wire_start = {}
 	queue_redraw()
 
@@ -494,6 +569,45 @@ func _on_run_dc() -> void:
 		_status_label.text = "DC solve failed — check diagnostics"
 		_rebuild_diagnostics()
 	queue_redraw()
+
+
+func _on_inspect_chip_internals(chip_name: String) -> void:
+	var json := host.get_chip_schematic_json(chip_name)
+	if json != "":
+		host.load_document_json(json)
+		_clear_transient()
+		_refresh_all()
+		_status_label.text = "Loaded internal schematic for chip '%s'" % chip_name
+	else:
+		_status_label.text = "Failed to load chip internals"
+
+
+func _on_open_pack_dialog() -> void:
+	var doc_name := host.document_name()
+	if doc_name == "" or doc_name == "untitled-circuit":
+		_pack_name_edit.text = "custom_chip"
+	else:
+		_pack_name_edit.text = doc_name
+	_pack_dialog.popup_centered(Vector2i(320, 180))
+
+
+func _on_confirm_pack() -> void:
+	var c_name := _pack_name_edit.text.strip_edges()
+	if c_name == "":
+		_status_label.text = "Chip name required"
+		return
+	var pkg := _pack_package_opt.get_item_text(_pack_package_opt.selected)
+	var save_path := "user://%s.twchip" % c_name
+	var res := host.pack_chip(c_name, "Custom", pkg, save_path)
+	if res.has("error"):
+		_status_label.text = "Pack failed: %s" % res["error"]
+		return
+
+	var msg := "Packed '%s' (%s)!" % [c_name, pkg]
+	if res.has("truth_tables"):
+		msg += " Characterized %d output(s)" % res["truth_tables"].size()
+	_status_label.text = msg
+	_populate_palette()
 
 
 func _on_undo() -> void:
@@ -576,6 +690,7 @@ func _build_part_props(part: Dictionary) -> void:
 	label_edit.placeholder_text = id
 	label_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	label_edit.text_submitted.connect(_on_rename_submitted.bind(id))
+	label_edit.focus_exited.connect(func(): _on_rename_submitted(label_edit.text, id))
 	label_row.add_child(label_caption)
 	label_row.add_child(label_edit)
 	_props_box.add_child(label_row)
@@ -583,6 +698,14 @@ func _build_part_props(part: Dictionary) -> void:
 	var params: Dictionary = part.get("params", {})
 	for key in params:
 		_add_param_row(id, String(key), params[key])
+
+	if String(part.get("kind", "")) == "chip":
+		var chip_name := String(params.get("chip_name", ""))
+		if chip_name != "":
+			var inspect_btn := Button.new()
+			inspect_btn.text = "Inspect '%s' Schematic" % chip_name
+			inspect_btn.pressed.connect(_on_inspect_chip_internals.bind(chip_name))
+			_props_box.add_child(inspect_btn)
 
 	var delete_button := Button.new()
 	delete_button.text = "Delete part"
@@ -597,6 +720,44 @@ func _add_param_row(id: String, key: String, value: Variant) -> void:
 	caption.custom_minimum_size = Vector2(86, 0)
 	row.add_child(caption)
 
+	if key == "direction":
+		var opt := OptionButton.new()
+		opt.add_item("input")
+		opt.add_item("output")
+		opt.add_item("power")
+		opt.add_item("ground")
+		opt.add_item("bidirectional")
+		var cur := str(value).to_lower()
+		var found := false
+		for i in opt.item_count:
+			if opt.get_item_text(i) == cur:
+				opt.select(i)
+				found = true
+				break
+		if not found:
+			opt.select(0)
+		opt.item_selected.connect(func(idx: int):
+			var val := opt.get_item_text(idx)
+			if host.set_param(id, key, val) == OK:
+				_refresh_after_edit(false)
+		)
+		row.add_child(opt)
+		_props_box.add_child(row)
+		return
+
+	if key == "name" or key == "chip_name":
+		var str_val := str(value)
+		if str_val == "0.0" or str_val == "0":
+			str_val = id
+		var text_edit := LineEdit.new()
+		text_edit.text = str_val
+		text_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		text_edit.text_submitted.connect(func(text: String): _on_param_string(text, id, key))
+		text_edit.focus_exited.connect(func(): _on_param_string(text_edit.text, id, key))
+		row.add_child(text_edit)
+		_props_box.add_child(row)
+		return
+
 	match typeof(value):
 		TYPE_BOOL:
 			var check := CheckBox.new()
@@ -608,19 +769,29 @@ func _add_param_row(id: String, key: String, value: Variant) -> void:
 			var int_edit := LineEdit.new()
 			int_edit.text = str(int(value))
 			int_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-			int_edit.text_submitted.connect(_on_param_text.bind(id, key, true))
+			int_edit.text_submitted.connect(func(text: String): _on_param_int(text, id, key))
+			int_edit.focus_exited.connect(func(): _on_param_int(int_edit.text, id, key))
 			row.add_child(int_edit)
 		TYPE_FLOAT:
 			var float_edit := LineEdit.new()
 			float_edit.text = str(float(value))
 			float_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-			float_edit.text_submitted.connect(_on_param_text.bind(id, key, false))
+			float_edit.text_submitted.connect(func(text: String): _on_param_float(text, id, key))
+			float_edit.focus_exited.connect(func(): _on_param_float(float_edit.text, id, key))
 			row.add_child(float_edit)
+		TYPE_STRING:
+			var text_edit := LineEdit.new()
+			text_edit.text = str(value)
+			text_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			text_edit.text_submitted.connect(func(text: String): _on_param_string(text, id, key))
+			text_edit.focus_exited.connect(func(): _on_param_string(text_edit.text, id, key))
+			row.add_child(text_edit)
 		_:
 			var text_edit := LineEdit.new()
 			text_edit.text = str(value)
 			text_edit.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-			text_edit.text_submitted.connect(_on_param_text.bind(id, key, false))
+			text_edit.text_submitted.connect(func(text: String): _on_param_string(text, id, key))
+			text_edit.focus_exited.connect(func(): _on_param_string(text_edit.text, id, key))
 			row.add_child(text_edit)
 
 	_props_box.add_child(row)
@@ -656,13 +827,24 @@ func _on_param_bool(pressed: bool, id: String, key: String) -> void:
 		_refresh_after_edit(false)
 
 
-func _on_param_text(text: String, id: String, key: String, is_int: bool) -> void:
+func _on_param_string(text: String, id: String, key: String) -> void:
 	var trimmed := text.strip_edges()
-	var value: Variant
-	if is_int:
-		value = int(trimmed)
-	else:
-		value = trimmed.to_float()
+	if trimmed == "":
+		return
+	if host.set_param(id, key, trimmed) == OK:
+		_refresh_after_edit(false)
+
+
+func _on_param_int(text: String, id: String, key: String) -> void:
+	var trimmed := text.strip_edges()
+	var value := int(trimmed)
+	if host.set_param(id, key, value) == OK:
+		_refresh_after_edit(false)
+
+
+func _on_param_float(text: String, id: String, key: String) -> void:
+	var trimmed := text.strip_edges()
+	var value := trimmed.to_float()
 	if host.set_param(id, key, value) == OK:
 		_refresh_after_edit(false)
 
@@ -700,8 +882,69 @@ func _pin_offsets(kind: String) -> Dictionary:
 	return PIN_OFFSETS.get(kind, {})
 
 
+func _pin_offsets_for_part(part: Dictionary) -> Dictionary:
+	var kind := String(part.get("kind", ""))
+	if kind != "chip":
+		return PIN_OFFSETS.get(kind, {})
+
+	var res := {}
+	var pins: Array = part.get("pins", [])
+	if pins.is_empty():
+		return res
+
+	var left_pins: Array[String] = []
+	var right_pins: Array[String] = []
+	var top_pins: Array[String] = []
+	var bottom_pins: Array[String] = []
+
+	for pin_var in pins:
+		var pname := String(pin_var)
+		var lower := pname.to_lower()
+		if lower.begins_with("in") or lower == "a" or lower == "b" or lower == "c" or lower == "d" or lower == "clk":
+			left_pins.append(pname)
+		elif lower.begins_with("out") or lower == "q" or lower == "y" or lower == "sum" or lower == "carry":
+			right_pins.append(pname)
+		elif lower == "vdd" or lower == "vcc" or lower == "pos":
+			top_pins.append(pname)
+		elif lower == "gnd" or lower == "vss" or lower == "neg":
+			bottom_pins.append(pname)
+		else:
+			if left_pins.size() <= right_pins.size():
+				left_pins.append(pname)
+			else:
+				right_pins.append(pname)
+
+	var half_w := 54.0
+
+	for i in range(left_pins.size()):
+		var y := -24.0 + float(i) * 24.0
+		if left_pins.size() == 1:
+			y = 0.0
+		res[left_pins[i]] = Vector2(-half_w, y)
+
+	for i in range(right_pins.size()):
+		var y := -24.0 + float(i) * 24.0
+		if right_pins.size() == 1:
+			y = 0.0
+		res[right_pins[i]] = Vector2(half_w, y)
+
+	for i in range(top_pins.size()):
+		var x := -16.0 + float(i) * 32.0
+		if top_pins.size() == 1:
+			x = 0.0
+		res[top_pins[i]] = Vector2(x, -48.0)
+
+	for i in range(bottom_pins.size()):
+		var x := -16.0 + float(i) * 32.0
+		if bottom_pins.size() == 1:
+			x = 0.0
+		res[bottom_pins[i]] = Vector2(x, 48.0)
+
+	return res
+
+
 func _pin_position(part: Dictionary, pin: String) -> Vector2:
-	var offsets := _pin_offsets(String(part["kind"]))
+	var offsets := _pin_offsets_for_part(part)
 	var offset: Vector2 = offsets.get(pin, Vector2.ZERO)
 	return Vector2(float(part["x"]), float(part["y"])) + offset
 
@@ -717,7 +960,7 @@ func _pin_at(pos: Vector2) -> Dictionary:
 	var parts: Array = _snapshot.get("parts", [])
 	for index in range(parts.size() - 1, -1, -1):
 		var part: Dictionary = parts[index]
-		var offsets := _pin_offsets(String(part["kind"]))
+		var offsets := _pin_offsets_for_part(part)
 		for pin_name in offsets:
 			var pin_pos := _pin_position(part, String(pin_name))
 			if pin_pos.distance_to(pos) <= 11.0:
@@ -734,7 +977,8 @@ func _part_at(pos: Vector2) -> String:
 	for index in range(parts.size() - 1, -1, -1):
 		var part: Dictionary = parts[index]
 		var center := Vector2(float(part["x"]), float(part["y"]))
-		if Rect2(center - Vector2(58, 58), Vector2(116, 116)).has_point(pos):
+		var box_size := Vector2(130, 110) if String(part.get("kind", "")) == "chip" else Vector2(116, 116)
+		if Rect2(center - box_size * 0.5, box_size).has_point(pos):
 			return String(part["id"])
 	return ""
 
@@ -787,7 +1031,9 @@ func _next_part_id(kind: String) -> String:
 		"pmos": "mp",
 		"lamp": "lamp",
 		"switch": "sw",
-		"probe": "p",
+		"probe": "pr",
+		"io_pin": "pin",
+		"chip": "u",
 	}
 	var prefix := String(prefixes.get(kind, "p"))
 	var index := 1
@@ -917,7 +1163,7 @@ func _draw_part(part: Dictionary) -> void:
 	var selected := id == _selected_part
 	var outline := WIRE_SELECTED if selected else TEXT_COLOR
 
-	var offsets := _pin_offsets(kind)
+	var offsets := _pin_offsets_for_part(part)
 	for pin_name in offsets:
 		var offset: Vector2 = offsets[pin_name]
 		var pin_position := center + offset
@@ -940,35 +1186,109 @@ func _draw_part(part: Dictionary) -> void:
 		draw_circle(pin_position, 6.0 if selected else 5.0, pin_color)
 		draw_circle(pin_position, 2.0, BG_COLOR)
 
-	_draw_symbol(kind, center, outline)
+	_draw_symbol(kind, center, outline, part)
 
-	var label := String(part.get("label", ""))
-	var caption := id if label == "" else "%s (%s)" % [id, label]
-	draw_string(
-		ThemeDB.fallback_font,
-		center + Vector2(-44, 70),
-		caption,
-		HORIZONTAL_ALIGNMENT_LEFT,
-		-1,
-		12,
-		TEXT_COLOR
-	)
-
-	var value_text := _part_value_text(part)
-	if value_text != "":
+	if kind != "io_pin":
+		var label := String(part.get("label", ""))
+		var caption := id if label == "" else "%s (%s)" % [id, label]
 		draw_string(
 			ThemeDB.fallback_font,
-			center + Vector2(-44, 84),
-			value_text,
+			center + Vector2(-44, 70),
+			caption,
 			HORIZONTAL_ALIGNMENT_LEFT,
 			-1,
-			11,
-			MUTED_COLOR
+			12,
+			TEXT_COLOR
 		)
 
+		var value_text := _part_value_text(part)
+		if value_text != "":
+			draw_string(
+				ThemeDB.fallback_font,
+				center + Vector2(-44, 84),
+				value_text,
+				HORIZONTAL_ALIGNMENT_LEFT,
+				-1,
+				11,
+				MUTED_COLOR
+			)
 
-func _draw_symbol(kind: String, center: Vector2, outline: Color) -> void:
+
+func _draw_symbol(kind: String, center: Vector2, outline: Color, part: Dictionary = {}) -> void:
 	match kind:
+		"io_pin":
+			var params: Dictionary = part.get("params", {})
+			var pname := String(params.get("name", ""))
+			if pname == "" or pname == "0.0" or pname == "0":
+				pname = String(part.get("id", "pin"))
+			var dir_str := String(params.get("direction", "input")).to_lower()
+			if dir_str == "" or dir_str == "0.0" or dir_str == "0":
+				dir_str = "input"
+
+			var badge_color := Color(0.25, 0.75, 1.0)
+			var dir_tag := "IN"
+			if dir_str.begins_with("out"):
+				badge_color = Color(1.0, 0.6, 0.2)
+				dir_tag = "OUT"
+			elif dir_str.begins_with("pow") or dir_str == "vdd" or dir_str == "vcc":
+				badge_color = Color(1.0, 0.35, 0.35)
+				dir_tag = "PWR"
+			elif dir_str.begins_with("gnd") or dir_str == "vss":
+				badge_color = Color(0.3, 0.85, 0.4)
+				dir_tag = "GND"
+			elif dir_str.begins_with("bi"):
+				badge_color = Color(0.8, 0.5, 1.0)
+				dir_tag = "BI"
+
+			var body_w := 74.0
+			var body_h := 28.0
+			var rect := Rect2(center.x - 52.0, center.y - body_h * 0.5, body_w, body_h)
+			draw_rect(rect, BODY_COLOR, true)
+			draw_rect(rect, outline, false, 2.0)
+
+			var tag_rect := Rect2(rect.position.x + 3.0, rect.position.y + 3.0, 24.0, body_h - 6.0)
+			draw_rect(tag_rect, badge_color * 0.25, true)
+			draw_rect(tag_rect, badge_color, false, 1.5)
+			draw_string(
+				ThemeDB.fallback_font,
+				tag_rect.position + Vector2(2.0, 15.0),
+				dir_tag,
+				HORIZONTAL_ALIGNMENT_CENTER,
+				20,
+				9,
+				badge_color
+			)
+
+			var name_x := tag_rect.end.x + 4.0
+			var name_w := rect.end.x - name_x - 3.0
+			draw_string(
+				ThemeDB.fallback_font,
+				Vector2(name_x, center.y + 4.0),
+				pname,
+				HORIZONTAL_ALIGNMENT_LEFT,
+				int(name_w),
+				11,
+				TEXT_COLOR
+			)
+
+			draw_line(Vector2(rect.end.x, center.y), center + Vector2(32, 0), outline, 2.0)
+
+			draw_string(
+				ThemeDB.fallback_font,
+				Vector2(rect.position.x, rect.position.y - 4.0),
+				part.get("id", ""),
+				HORIZONTAL_ALIGNMENT_LEFT,
+				-1,
+				10,
+				MUTED_COLOR
+			)
+		"chip":
+			var rect := Rect2(center - Vector2(40, 36), Vector2(80, 72))
+			draw_rect(rect, BODY_COLOR, true)
+			draw_rect(rect, outline, false, 2.5)
+			draw_arc(center + Vector2(0, -36), 6.0, 0.0, PI, 16, outline, 2.0)
+			var chip_name := String(part.get("params", {}).get("chip_name", "IC"))
+			draw_string(ThemeDB.fallback_font, center + Vector2(-36, 4), chip_name, HORIZONTAL_ALIGNMENT_CENTER, 72, 13, TEXT_COLOR)
 		"resistor":
 			var body := Rect2(center - Vector2(34, 16), Vector2(68, 32))
 			draw_rect(body, BODY_COLOR, true)
@@ -1086,6 +1406,16 @@ func _part_value_text(part: Dictionary) -> String:
 			text = "probe"
 			if _has_state and _probe_voltages.has(id):
 				text = "V = %s" % str(float(_probe_voltages[id]))
+		"io_pin":
+			var d := String(params.get("direction", "input"))
+			if d == "0.0" or d == "0" or d == "":
+				d = "input"
+			var n := String(params.get("name", id))
+			if n == "0.0" or n == "0" or n == "":
+				n = id
+			text = "%s: %s" % [d, n]
+		"chip":
+			text = "IC: %s" % String(params.get("chip_name", ""))
 	return text
 
 

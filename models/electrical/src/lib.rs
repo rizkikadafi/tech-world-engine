@@ -27,10 +27,11 @@ pub use analysis::{
 pub use bridge::{BridgeConfig, BridgeInput, BridgeOutput, CircuitComponent};
 pub use characterization::{
     CharacterizationConfig, Characterizer, CircuitTemplate, GateCharacterization, GateKind,
-    LogicLevels, Measurement, TemplateInput, TimingMetrics, TruthTable,
+    GenericCircuitCharacterization, LogicLevels, Measurement, SingleOutputCharacterization,
+    TemplateInput, TimingMetrics, TruthTable,
 };
 pub use circuit::Circuit;
-pub use derived::{DerivedDff, DerivedError, DerivedGate, TimingTicks};
+pub use derived::{DerivedCustomComponent, DerivedDff, DerivedError, DerivedGate, TimingTicks};
 pub use device::{Capacitor, CurrentSource, Diode, Mosfet, MosfetType, Resistor, VoltageSource};
 pub use digital::{cmos_d_latch, cmos_dff, cmos_full_adder, cmos_half_adder};
 pub use error::CircuitError;

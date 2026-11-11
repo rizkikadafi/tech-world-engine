@@ -512,3 +512,104 @@ fn derived_dff_rejects_non_dff_characterization() {
         DerivedError::UnsupportedKind(GateKind::Inverter)
     ));
 }
+
+#[test]
+fn generic_characterize_and_derived_custom_nand() {
+    let mut circuit = Circuit::new();
+    let n_vdd = circuit.get_or_add_node("vdd");
+    let n_a = circuit.get_or_add_node("a");
+    let n_b = circuit.get_or_add_node("b");
+    let n_out = circuit.get_or_add_node("out");
+
+    circuit.add_voltage_source("Vdd", n_vdd, NodeId::GROUND, 5.0);
+    cmos_nand(CmosGateConfig::default()).instantiate(
+        &mut circuit,
+        "NAND1",
+        &[
+            ("A", n_a),
+            ("B", n_b),
+            ("OUT", n_out),
+            ("VDD", n_vdd),
+            ("GND", NodeId::GROUND),
+        ],
+    ).expect("instantiate nand");
+
+    let characterizer = Characterizer::with_defaults();
+    let result = characterizer
+        .characterize_generic_circuit(
+            &circuit,
+            &["a".to_string(), "b".to_string()],
+            &["out".to_string()],
+            Some("vdd"),
+        )
+        .expect("characterization succeeds");
+
+    assert_eq!(result.input_names, vec!["a", "b"]);
+    assert_eq!(result.output_names, vec!["out"]);
+    let out_char = result.outputs.get("out").expect("out output characterized");
+    assert_eq!(out_char.truth_table.inputs, 2);
+    // NAND truth table: 00->1, 01->1, 10->1, 11->0
+    assert_eq!(out_char.truth_table.outputs, vec![true, true, true, false]);
+    assert!(out_char.timing.t_pHL > 0.0);
+    assert!(out_char.timing.t_pLH > 0.0);
+
+    // Now instantiate as DerivedCustomComponent
+    let mut comp = DerivedCustomComponent::from_characterization(
+        tw_core::ComponentId(10),
+        "CustomNand",
+        result,
+        TimeBase::default(),
+    )
+    .expect("derived custom component created");
+
+    assert_eq!(comp.ports().len(), 3);
+    assert_eq!(comp.state().get_bool("out"), Some(true));
+
+    let mut graph = CausalGraph::new();
+    let mut ctx = context(&mut graph, 0);
+
+    // In a:0, b:0 -> out is 1
+    // Set a:1
+    let port_a = PortId(1);
+    let port_b = PortId(2);
+    let port_out = PortId(3);
+
+    let event_a1 = Event::at(
+        SimulationTime::new(1),
+        comp.id(),
+        comp.id(),
+        EventPayload::PortSignal {
+            port_id: port_a,
+            value: StateValue::Bool(true),
+        },
+    );
+    // 10 still outputs 1, no event scheduled
+    let sched = comp.handle_event(&event_a1, &mut ctx);
+    assert!(sched.is_empty());
+
+    // Set b:1 -> should schedule transition to 0
+    let event_b1 = Event::at(
+        SimulationTime::new(2),
+        comp.id(),
+        comp.id(),
+        EventPayload::PortSignal {
+            port_id: port_b,
+            value: StateValue::Bool(true),
+        },
+    );
+    let sched = comp.handle_event(&event_b1, &mut ctx);
+    assert_eq!(sched.len(), 1);
+    assert!(sched[0].time.ticks() > 2);
+
+    // Commit transition
+    let commit = comp.handle_event(&sched[0], &mut ctx);
+    assert_eq!(commit.len(), 1);
+    assert_eq!(
+        commit[0].payload,
+        EventPayload::PortSignal {
+            port_id: port_out,
+            value: StateValue::Bool(false),
+        }
+    );
+    assert_eq!(comp.state().get_bool("out"), Some(false));
+}

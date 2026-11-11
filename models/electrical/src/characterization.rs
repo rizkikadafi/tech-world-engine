@@ -11,6 +11,9 @@
 //! Nothing here hardcodes gate logic: the truth table is obtained from `dc_op`
 //! on the same physical circuit that produces the timing numbers.
 
+use std::collections::HashMap;
+
+use serde::{Deserialize, Serialize};
 use tw_core::PortId;
 
 use crate::analysis::{dc_op, integrate_source_energy, transient, TransientResult};
@@ -22,7 +25,7 @@ use crate::node::NodeId;
 use crate::state::CircuitState;
 
 /// Configuration for a characterization run.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CharacterizationConfig {
     /// Supply voltage (V).
     pub vdd: f64,
@@ -117,7 +120,7 @@ impl CharacterizationConfig {
 }
 
 /// Measured logic levels of a gate output.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct LogicLevels {
     /// Output voltage for a logic low.
     pub low: f64,
@@ -139,7 +142,7 @@ impl LogicLevels {
 
 /// Dynamic metrics extracted from a physical circuit.
 #[allow(non_snake_case)]
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TimingMetrics {
     /// High-to-low propagation delay, measured from the input step (s).
     pub t_pHL: f64,
@@ -171,7 +174,7 @@ impl TimingMetrics {
 ///
 /// `outputs` is indexed by the binary input pattern, with the first input as
 /// the most significant bit: for two inputs the order is `00, 01, 10, 11`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TruthTable {
     /// Number of inputs.
     pub inputs: usize,
@@ -224,7 +227,7 @@ impl TruthTable {
 }
 
 /// Kind of physical circuit being characterized.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum GateKind {
     /// Single-input CMOS inverter.
     Inverter,
@@ -263,7 +266,7 @@ impl GateKind {
 }
 
 /// Complete result of characterizing one physical gate.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GateCharacterization {
     /// Kind of circuit that was measured.
     pub kind: GateKind,
@@ -274,6 +277,24 @@ pub struct GateCharacterization {
     /// Measured dynamic metrics.
     pub timing: TimingMetrics,
     /// Configuration used for the measurement.
+    pub config: CharacterizationConfig,
+}
+
+/// Measured characterization for a single output in an arbitrary multi-output circuit.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SingleOutputCharacterization {
+    pub output_name: String,
+    pub truth_table: TruthTable,
+    pub levels: LogicLevels,
+    pub timing: TimingMetrics,
+}
+
+/// Characterization result for a multi-input, multi-output arbitrary circuit.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GenericCircuitCharacterization {
+    pub input_names: Vec<String>,
+    pub output_names: Vec<String>,
+    pub outputs: HashMap<String, SingleOutputCharacterization>,
     pub config: CharacterizationConfig,
 }
 
@@ -678,6 +699,278 @@ impl Characterizer {
             levels,
             timing,
             config: self.config.clone(),
+        })
+    }
+
+    /// Characterizes an arbitrary combinational circuit given a set of input node names
+    /// and output node names.
+    ///
+    /// It automatically synthesizes input testbench drivers, sweeps DC input patterns to
+    /// construct the truth table for every output, and measures edge transitions via
+    /// transient simulations to determine propagation delays and rise/fall times.
+    pub fn characterize_generic_circuit(
+        &self,
+        circuit: &Circuit,
+        inputs: &[String],
+        outputs: &[String],
+        supply_node: Option<&str>,
+    ) -> Result<GenericCircuitCharacterization, CircuitError> {
+        if inputs.is_empty() {
+            return Err(CircuitError::InvalidElement(
+                "Cannot characterize a circuit with zero inputs".to_string(),
+            ));
+        }
+        if outputs.is_empty() {
+            return Err(CircuitError::InvalidElement(
+                "Cannot characterize a circuit with zero outputs".to_string(),
+            ));
+        }
+        if inputs.len() > 10 {
+            return Err(CircuitError::InvalidElement(format!(
+                "Too many inputs for characterization: {} (max 10)",
+                inputs.len()
+            )));
+        }
+
+        let mut testbench = circuit.clone();
+
+        // Ensure supply exists if specified
+        if let Some(sup) = supply_node {
+            let n_sup = testbench.get_or_add_node(sup);
+            if testbench
+                .voltage_source(&self.config.supply_source)
+                .is_none()
+            {
+                testbench.add_voltage_source(
+                    self.config.supply_source.clone(),
+                    n_sup,
+                    NodeId::GROUND,
+                    self.config.vdd,
+                );
+            }
+        }
+
+        // Add input drivers
+        let mut input_sources = Vec::with_capacity(inputs.len());
+        for in_name in inputs {
+            let n_in = testbench.get_or_add_node(in_name);
+            let src_name = format!("__stim_{}", in_name);
+            testbench.add_voltage_source(src_name.clone(), n_in, NodeId::GROUND, 0.0);
+            input_sources.push(src_name);
+        }
+
+        // Add load capacitance to outputs if configured
+        let mut output_nodes = Vec::with_capacity(outputs.len());
+        for out_name in outputs {
+            let n_out = testbench.get_or_add_node(out_name);
+            output_nodes.push(n_out);
+            if self.config.load_capacitance > 0.0 {
+                testbench.add_capacitor(
+                    format!("__load_cap_{}", out_name),
+                    n_out,
+                    NodeId::GROUND,
+                    self.config.load_capacitance,
+                );
+            }
+        }
+
+        // Sweep DC combinations
+        let combinations = 1usize << inputs.len();
+        let mut output_voltages: Vec<Vec<f64>> =
+            vec![Vec::with_capacity(combinations); outputs.len()];
+        for pattern in 0..combinations {
+            let values = decode_pattern(pattern, inputs.len());
+            self.set_inputs(&mut testbench, &input_sources, &values)?;
+            let state = dc_op(&testbench)?;
+            for (out_idx, &n_out) in output_nodes.iter().enumerate() {
+                output_voltages[out_idx].push(state.voltage(n_out));
+            }
+        }
+
+        let mut out_map = HashMap::new();
+
+        for (out_idx, out_name) in outputs.iter().enumerate() {
+            let voltages = &output_voltages[out_idx];
+            let mut low = f64::INFINITY;
+            let mut high = f64::NEG_INFINITY;
+            for &v in voltages {
+                low = low.min(v);
+                high = high.max(v);
+            }
+
+            // If degenerated/no swing, enforce sensible default levels
+            if (high - low).abs() < 0.1 {
+                if high > self.config.vdd * 0.5 {
+                    low = 0.0;
+                } else {
+                    high = self.config.vdd;
+                }
+            }
+
+            let levels = LogicLevels { low, high };
+            let mid = levels.threshold(self.config.mid_threshold);
+            let truth_outputs: Vec<bool> = voltages.iter().map(|&v| v > mid).collect();
+            let truth_table = TruthTable::new(inputs.len(), truth_outputs)?;
+
+            // Find transition pairs for timing measurement
+            let mut fall_pair = None;
+            let mut rise_pair = None;
+
+            for p1 in 0..combinations {
+                for p2 in 0..combinations {
+                    if (p1 ^ p2).count_ones() == 1 {
+                        if truth_table.outputs[p1] && !truth_table.outputs[p2] && fall_pair.is_none()
+                        {
+                            fall_pair = Some((p1, p2));
+                        }
+                        if !truth_table.outputs[p1] && truth_table.outputs[p2] && rise_pair.is_none()
+                        {
+                            rise_pair = Some((p1, p2));
+                        }
+                    }
+                }
+            }
+
+            if fall_pair.is_none() {
+                for p1 in 0..combinations {
+                    for p2 in 0..combinations {
+                        if truth_table.outputs[p1] && !truth_table.outputs[p2] {
+                            fall_pair = Some((p1, p2));
+                            break;
+                        }
+                    }
+                    if fall_pair.is_some() {
+                        break;
+                    }
+                }
+            }
+            if rise_pair.is_none() {
+                for p1 in 0..combinations {
+                    for p2 in 0..combinations {
+                        if !truth_table.outputs[p1] && truth_table.outputs[p2] {
+                            rise_pair = Some((p1, p2));
+                            break;
+                        }
+                    }
+                    if rise_pair.is_some() {
+                        break;
+                    }
+                }
+            }
+
+            let n_out = output_nodes[out_idx];
+            let timing = self.measure_output_timing(
+                &mut testbench,
+                &input_sources,
+                n_out,
+                levels,
+                fall_pair,
+                rise_pair,
+                inputs.len(),
+            )?;
+
+            out_map.insert(
+                out_name.clone(),
+                SingleOutputCharacterization {
+                    output_name: out_name.clone(),
+                    truth_table,
+                    levels,
+                    timing,
+                },
+            );
+        }
+
+        Ok(GenericCircuitCharacterization {
+            input_names: inputs.to_vec(),
+            output_names: outputs.to_vec(),
+            outputs: out_map,
+            config: self.config.clone(),
+        })
+    }
+
+    fn measure_output_timing(
+        &self,
+        circuit: &mut Circuit,
+        input_sources: &[String],
+        n_out: NodeId,
+        levels: LogicLevels,
+        fall_pair: Option<(usize, usize)>,
+        rise_pair: Option<(usize, usize)>,
+        input_count: usize,
+    ) -> Result<TimingMetrics, CircuitError> {
+        let low_th = levels.threshold(self.config.low_threshold);
+        let mid_th = levels.threshold(self.config.mid_threshold);
+        let high_th = levels.threshold(self.config.high_threshold);
+
+        let mut t_phl = self.config.dt * 2.0;
+        let mut t_fall = self.config.dt;
+        let mut energy_fall = 0.0;
+
+        let supply_voltage = circuit
+            .voltage_source(&self.config.supply_source)
+            .map(|src| src.voltage)
+            .unwrap_or(self.config.vdd);
+
+        if let Some((p_init, p_final)) = fall_pair {
+            let init_vals = decode_pattern(p_init, input_count);
+            let final_vals = decode_pattern(p_final, input_count);
+            if let Ok(fall_res) = self.measure_edge(circuit, input_sources, &init_vals, &final_vals)
+            {
+                let fall_wave = fall_res.voltage_waveform(n_out);
+                let f_high = crossing_time(&fall_wave, high_th, false);
+                let f_mid = crossing_time(&fall_wave, mid_th, false);
+                let f_low = crossing_time(&fall_wave, low_th, false);
+
+                if let (Some(fh), Some(fm), Some(fl)) = (f_high, f_mid, f_low) {
+                    if fl > fh {
+                        t_phl = fm;
+                        t_fall = fl - fh;
+                    }
+                }
+                if let Ok(energy) =
+                    integrate_source_energy(&fall_res, &self.config.supply_source, supply_voltage)
+                {
+                    energy_fall = energy;
+                }
+            }
+        }
+
+        let mut t_plh = self.config.dt * 2.0;
+        let mut t_rise = self.config.dt;
+        let mut energy_rise = 0.0;
+
+        if let Some((p_init, p_final)) = rise_pair {
+            let init_vals = decode_pattern(p_init, input_count);
+            let final_vals = decode_pattern(p_final, input_count);
+            if let Ok(rise_res) = self.measure_edge(circuit, input_sources, &init_vals, &final_vals)
+            {
+                let rise_wave = rise_res.voltage_waveform(n_out);
+                let r_low = crossing_time(&rise_wave, low_th, true);
+                let r_mid = crossing_time(&rise_wave, mid_th, true);
+                let r_high = crossing_time(&rise_wave, high_th, true);
+
+                if let (Some(rl), Some(rm), Some(rh)) = (r_low, r_mid, r_high) {
+                    if rh > rl {
+                        t_plh = rm;
+                        t_rise = rh - rl;
+                    }
+                }
+                if let Ok(energy) =
+                    integrate_source_energy(&rise_res, &self.config.supply_source, supply_voltage)
+                {
+                    energy_rise = energy;
+                }
+            }
+        }
+
+        Ok(TimingMetrics {
+            t_pHL: t_phl,
+            t_pLH: t_plh,
+            t_rise,
+            t_fall,
+            energy_rise,
+            energy_fall,
+            energy_per_cycle: energy_rise + energy_fall,
         })
     }
 

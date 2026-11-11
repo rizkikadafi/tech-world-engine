@@ -70,8 +70,8 @@ pub fn resolve(document: &CircuitDocument) -> Result<NetMap, SchematicError> {
 
     let mut pins = Vec::new();
     for part in document.parts() {
-        for definition in part.kind.pins() {
-            pins.push(PinRef::new(part.id.clone(), definition.name));
+        for pin_name in part.pin_names() {
+            pins.push(PinRef::new(part.id.clone(), pin_name));
         }
     }
 
